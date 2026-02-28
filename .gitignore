@@ -1,0 +1,25 @@
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# ── Data / Artefacts ────────────────────────────────
+*.db
+data/processed/
+embeddings/*.faiss
+embeddings/*.index
+
+# ── OS / Editor ─────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ── Jupyter ─────────────────────────────────────────
+.ipynb_checkpoints/
