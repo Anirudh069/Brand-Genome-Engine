@@ -1,111 +1,141 @@
-# Brand Genome Engine
-
-Brand Genome Engine that learns a brand's **"voice DNA"** from its existing text corpus
-(website copy, product descriptions, emails, social posts) and then evaluates new copy
-for on-brand consistency, using the concepts of **NLP, AI & RAG**.
+<div align="center">
+  <h1>🧬 Brand Genome Engine</h1>
+  <p><strong>Enterprise-Grade Semantic Brand Consistency & Execution Platform</strong></p>
+</div>
 
 ---
 
-## Repository layout
+## 📖 Overview
 
+**Brand Genome Engine** is a full-stack, AI-powered application designed to enforce, measure, and automate brand voice consistency across all corporate communications. By combining **Retrieval-Augmented Generation (RAG)** with deterministic linguistic scoring, the engine evaluates incoming text and generates highly-aligned, on-brand rewrites.
+
+This project delivers a state-of-the-art UI with a high-performance Python backend, enabling marketing and editorial teams to execute flawlessly at scale.
+
+## ✨ Core Features
+
+- 🎯 **Brand Genome Setup:** Configure target sentiment, tone, and core keywords to establish a baseline DNA profile for any brand.
+- 📊 **Consistency Scoring:** Multi-dimensional semantic evaluation (Tone, Vocabulary, Readability, Sentiment) of any text snippet against the target brand.
+- ✍️ **AI Rewrite Pipeline:** A sophisticated RAG-driven workflow that retrieves on-brand grounding examples (via FAISS) and prompts an LLM to elevate off-brand text.
+- 📈 **Market Benchmarking:** Direct side-by-side radar and distribution comparisons against top industry competitors.
+- 📉 **Historical Analytics:** Visual trajectory mapping of brand alignment improvements over time.
+
+---
+
+## 🏗️ Architecture Stack
+
+### Backend (Python / FastAPI)
+- **Framework:** FastAPI for high-performance, asynchronous REST endpoints.
+- **Database:** SQLite3 for lightweight, robust storage of profiles and text chunks.
+- **AI Integration:** OpenAI API wrapper for advanced semantic generation, configurable via environment variables.
+- **RAG & Search:** FAISS (Facebook AI Similarity Search) integration for ultra-fast vector retrieval of brand grounding chunks.
+
+### Frontend (React.js / Vite)
+- **Framework:** React 18 powered by Vite for instant Hot Module Replacement (HMR).
+- **Styling:** Tailwind CSS for a highly customized, premium "dark mode" enterprise aesthetic.
+- **Visualization:** Recharts for dynamic, responsive radar charts, histograms, and line graphs.
+- **Icons & Animation:** Lucide-React and Framer Motion for sleek micro-interactions.
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Docker** (Recommended for 1-click execution)
+- **Python 3.10+** (For manual backend execution)
+- **Node.js 18+ & npm** (For manual frontend execution)
+
+### 1. Environment Configuration
+
+Copy the provided `.env.template` (or create a new `.env` file in the root directory) and configure your API keys:
+
+```env
+# LLM Provider
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-openai-api-key
+LLM_MODEL=gpt-4o-mini
+LLM_TIMEOUT_SECONDS=30
+
+# Storage
+SQLITE_DB_PATH=data/brand_data.db
+EMBEDDINGS_DIR=embeddings/
+
+# Server
+CORS_ORIGIN=http://localhost:5173
+API_PORT=8000
 ```
-Brand-Genome-Engine/
-├── data/
-│   ├── raw/                  # Original CSVs / scraped text
-│   └── processed/            # Cleaned & chunked artefacts
-├── embeddings/               # FAISS indices & serialised embeddings
-├── src/
-│   ├── feature_extraction/   # Embedding & feature-extraction logic
-│   └── benchmarking/         # Evaluation & scoring utilities
-├── scripts/                  # One-off or CLI helper scripts
-├── tests/                    # Pytest test suite
-├── notebooks/                # Exploratory Jupyter notebooks
-├── docs/                     # Documentation & design notes
-├── data_ingestion_pipeline.py
-├── requirements.txt
-└── .gitignore
-```
 
-## Quick-start
+---
 
+### 2. Execution (Docker) - Recommended
+
+Start the entire application stack using the provided execution scripts. This will automatically build the React frontend and spin up the FastAPI backend in parallel containers.
+
+- **Windows:** `.\run.bat`
+- **Mac/Linux:** `./run.sh`
+
+*(Alternatively, run `docker compose up --build` directly)*
+
+- **App UI:** `http://localhost:5173`
+- **API Docs:** `http://localhost:8000/docs`
+
+---
+
+### 3. Execution (Manual)
+
+If you prefer to run the services locally without Docker:
+
+#### Start the Backend
 ```bash
-# 1. Create & activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
+# 1. Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
 
-# 2. Install dependencies (CPU-only)
+# 2. Install dependencies
 pip install -r requirements.txt
-#    This installs sentence-transformers, torch (CPU), and other deps.
-#    The first embedding call will download all-MiniLM-L6-v2 (~80 MB).
 
-# 3. Ingest raw data into SQLite
-#    Place your CSV at raw_texts_watches.csv (repo root), then:
-python data_ingestion_pipeline.py
-
-# 4. Run feature extraction (once modules are implemented)
-python -m src.feature_extraction  # or a dedicated script in scripts/
-
-# 5. Build the FAISS index
-python -m src.feature_extraction  # (placeholder – see module README)
-
-# 6. Run the test suite
-pytest tests/ -v
+# 3. Start the API server
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## Running tests
-
+#### Start the Frontend
+Open a **new terminal window**:
 ```bash
-# Run all tests (embedding tests use hash fallback – no model download)
-pytest tests/ -v --tb=short
+# 1. Navigate to the frontend directory
+cd frontend
 
-# Run REAL embedding model tests (downloads all-MiniLM-L6-v2 on first run)
-RUN_EMBEDDING_TESTS=1 pytest tests/test_embedding_extractor.py -k TestRealModel -v
+# 2. Install Node dependencies
+npm install
 
-# Run all tests including real embedding model
-RUN_EMBEDDING_TESTS=1 pytest tests/ -v --tb=short
+# 3. Start the Vite development server
+npm run dev
 ```
 
-## ML contract
+---
 
-The canonical feature schema is defined in
-[`docs/ml_contract.md`](docs/ml_contract.md) and enforced by
-`src.feature_extraction.text_features.ExtractedFeatures`.
+## 📂 Project Structure
 
-Every text document processed by the pipeline produces an `ExtractedFeatures`
-record with these key fields:
-
-| Field                 | Type          | Range / Shape    |
-|-----------------------|---------------|------------------|
-| `sentiment`           | `float`       | [0.0, 1.0]      |
-| `formality`           | `float`       | [0.0, 1.0]      |
-| `readability_flesch`  | `float`       | [0.0, ~121.0]   |
-| `avg_sentence_length` | `float`       | [0.0, ∞)        |
-| `punctuation_density` | `float`       | [0.0, 1.0]      |
-| `vocab_diversity`     | `float`       | [0.0, 1.0]      |
-| `top_topics`          | `list[str]`   | len = num_topics |
-| `topic_weights`       | `list[float]` | same length      |
-| `embedding`           | `list[float]` | **len = 384**    |
-
-### Consuming features downstream
-
-```python
-from src.feature_extraction import TextFeatureExtractor, ExtractedFeatures
-
-extractor = TextFeatureExtractor()
-
-features: ExtractedFeatures = extractor.extract_all_features(
-    text="Rolex epitomises timeless luxury...",
-    text_id="txt_001",
-    brand_id="brand_rolex",
-    brand_name="Rolex",
-)
-
-# Use individual fields
-print(features.sentiment)        # float in [0, 1]
-print(len(features.embedding))   # 384
-features.validate()              # raises ValueError on contract violation
+```text
+brand-genome-engine/
+├── data/                  # SQLite databases and raw training data
+├── embeddings/            # FAISS vector indexes for RAG
+├── frontend/              # Vite + React Application
+│   ├── src/
+│   │   ├── components/    # Reusable UI widgets and layout shells
+│   │   ├── lib/           # Utility functions and API constants
+│   │   └── pages/         # Top-level route modules (Analytics, Setup, etc.)
+│   └── package.json       # Node dependencies
+├── src/
+│   ├── api/               # FastAPI route definitions and models
+│   │   └── main.py        # Core application entrypoint
+│   └── pipeline/          # (Team components) Feature extraction & FAISS scripts
+├── .env                   # Environment secrets config
+├── docker-compose.yml     # Orchestration
+└── requirements.txt       # Python backend dependencies
 ```
 
-## License
+---
 
-See [LICENSE](LICENSE) for details.
+<div align="center">
+  <p>Built for the modern brand execution team.</p>
+</div>

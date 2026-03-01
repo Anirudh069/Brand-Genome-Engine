@@ -1,18 +1,32 @@
 # ── Python ───────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*.pyc
+*.pyo
+*.pyd
 *.egg-info/
 dist/
 build/
 .venv/
 venv/
+env/
 *.egg
+.Python
+
+# ── Environment variables ────────────────────────────
+.env
+.env.*
 
 # ── Data / Artefacts ────────────────────────────────
 *.db
 data/processed/
 embeddings/*.faiss
+embeddings/*.pkl
 embeddings/*.index
+
+# ── Frontend ─────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
 
 # ── OS / Editor ─────────────────────────────────────
 .DS_Store
