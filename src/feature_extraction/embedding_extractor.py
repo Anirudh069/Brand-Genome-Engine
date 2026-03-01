@@ -130,14 +130,15 @@ def get_embedding(
     """
     try:
         cleaned = clean_text(text)
-        encode_text = cleaned if cleaned else _PLACEHOLDER_TEXT
-        use_placeholder = not cleaned
+        if not cleaned:
+            # Empty / None / whitespace-only → always zero vector
+            return [0.0] * _EMBEDDING_DIM, model_name
 
         # Try the real model first
         try:
             _seed_deterministic()
             model = _get_model(model_name)
-            vec = model.encode(encode_text).tolist()  # type: ignore[union-attr]
+            vec = model.encode(cleaned).tolist()  # type: ignore[union-attr]
             if len(vec) == _EMBEDDING_DIM:
                 return vec, model_name
             logger.warning(
@@ -157,9 +158,7 @@ def get_embedding(
             )
 
         # Deterministic fallback
-        if use_placeholder:
-            return [0.0] * _EMBEDDING_DIM, model_name
-        return _hash_fallback(encode_text, _EMBEDDING_DIM), model_name
+        return _hash_fallback(cleaned, _EMBEDDING_DIM), model_name
 
     except Exception:
         logger.exception("get_embedding failed – returning zero vector")

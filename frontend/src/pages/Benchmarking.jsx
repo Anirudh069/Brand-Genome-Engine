@@ -63,10 +63,9 @@ export const Benchmarking = ({ profile }) => {
                                     value={competitor}
                                     onChange={(e) => setCompetitor(e.target.value)}
                                     className="w-full px-4 py-3.5 bg-[#09090B] border border-white/10 rounded-xl focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 outline-none transition-all duration-300 text-gray-100 appearance-none shadow-inner cursor-pointer"
-                                >
-                                    <option value="rolex" className="bg-[#111116] text-white">Rolex</option>
+                                >                                    <option value="rolex" className="bg-[#111116] text-white">Rolex</option>
                                     <option value="omega" className="bg-[#111116] text-white">Omega</option>
-                                    <option value="tagheuer" className="bg-[#111116] text-white">Tag Heuer</option>
+                                    <option value="tag_heuer" className="bg-[#111116] text-white">Tag Heuer</option>
                                     <option value="tissot" className="bg-[#111116] text-white">Tissot</option>
                                     <option value="titan" className="bg-[#111116] text-white">Titan</option>
                                 </select>

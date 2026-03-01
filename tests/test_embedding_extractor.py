@@ -6,6 +6,12 @@ Contract: returns list[float] of length 384, never raises.
 
 Real-model tests (require model download) only run when the environment
 variable ``RUN_EMBEDDING_TESTS=1`` is set.
+
+Note: On CPython 3.9 + macOS (LibreSSL 2.8), importing both faiss and
+sentence-transformers in the same process can segfault.  This entire module
+is marked ``requires_model`` and is skipped during combined runs unless
+``--include-model-tests`` is passed.  Run in isolation:
+``python -m pytest tests/test_embedding_extractor.py -v``
 """
 
 from __future__ import annotations
@@ -13,6 +19,8 @@ from __future__ import annotations
 import os
 
 import pytest
+
+pytestmark = pytest.mark.requires_model
 
 from src.feature_extraction.embedding_extractor import (
     extract_embedding,

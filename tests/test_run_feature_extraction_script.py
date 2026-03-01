@@ -6,6 +6,10 @@ Verifies that ``main()`` can:
 2. Read from a temporary CSV
 3. Produce a valid Parquet file with the expected columns
 4. Report errors for missing tables / columns
+
+Note: This module triggers sentence-transformers model loading via the
+feature extraction pipeline.  Marked ``requires_model`` to avoid segfault
+when combined with faiss tests on CPython 3.9 + macOS.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ import textwrap
 
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.requires_model
 
 from scripts.run_feature_extraction import (
     COLUMN_ORDER,
