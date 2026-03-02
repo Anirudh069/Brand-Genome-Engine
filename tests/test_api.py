@@ -92,13 +92,13 @@ class TestCheckConsistency:
         assert r.status_code == 200
         assert r.json()["error"] == "text_too_short"
 
-    def test_unknown_brand_still_works(self):
+    def test_unknown_brand_returns_404(self):
         r = client.post("/api/check-consistency", json={
             "text": ROLEX_ON_BRAND, "brand_id": "unknown_brand_xyz",
         })
-        assert r.status_code == 200
+        assert r.status_code == 404
         body = r.json()
-        assert body["overall_score"] >= 0
+        assert body["detail"]["error"] == "profile_missing"
 
     def test_on_brand_scores_higher_than_off_brand(self):
         on = client.post("/api/check-consistency", json={
@@ -108,9 +108,50 @@ class TestCheckConsistency:
             "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
         }).json()
         assert on["overall_score"] > off["overall_score"], (
-            f"On-brand ({on[chr(39)+'overall_score'+chr(39)]}) should beat "
-            f"off-brand ({off[chr(39)+'overall_score'+chr(39)]})"
+            f"On-brand ({on['overall_score']}) should beat "
+            f"off-brand ({off['overall_score']})"
         )
+
+
+class TestCheckConsistencyContract:
+    """Frozen response-schema contract for POST /api/check-consistency."""
+
+    FROZEN_KEYS = {
+        "brand_id", "brand_name",
+        "overall_score", "tone_pct", "vocab_overlap_pct",
+        "sentiment_alignment_pct", "readability_match_pct",
+        "error",
+    }
+
+    def test_response_keys_exact(self):
+        r = client.post("/api/check-consistency", json={
+            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
+        })
+        assert r.status_code == 200
+        assert set(r.json().keys()) == self.FROZEN_KEYS
+
+    def test_pct_values_numeric_and_clamped(self):
+        body = client.post("/api/check-consistency", json={
+            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
+        }).json()
+        for k in SCORE_KEYS:
+            v = body[k]
+            assert isinstance(v, (int, float)), f"{k} is {type(v)}"
+            assert 0 <= v <= 100, f"{k}={v} out of [0,100]"
+
+    def test_error_null_on_success(self):
+        body = client.post("/api/check-consistency", json={
+            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
+        }).json()
+        assert body["error"] is None
+
+    def test_short_text_returns_zeros(self):
+        body = client.post("/api/check-consistency", json={
+            "text": "Hi", "brand_id": "rolex",
+        }).json()
+        assert body["error"] == "text_too_short"
+        for k in SCORE_KEYS:
+            assert body[k] == 0
 
 
 class TestRewrite:
@@ -283,7 +324,7 @@ class TestBenchmark:
 
     def test_different_brands_produce_different_scores(self):
         r1 = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "titan",
+            "my_brand": "Rolex", "competitor": "tissot",
             "metric": "Sentiment Distribution",
         })
         body = r1.json()

@@ -10,6 +10,8 @@ import { RewritePanel } from "../components/ui/RewritePanel";
 import { GroundingExamples } from "../components/ui/GroundingExamples";
 import { API_BASE } from "../lib/constants";
 
+const ENABLE_REWRITE_UI = false; // flip to true later
+
 // Helper component for rendering Before/After scores with animated progress bars
 const DualMetricBar = ({ label, beforeVal, afterVal, baseColor }) => {
     return (
@@ -53,39 +55,55 @@ export const ConsistencyCheck = () => {
     const [result, setResult] = useState(null);
 
     const handleRewrite = async () => {
-        if (!selectedBrand || !copyText) return;
-        setLoading(true);
-        setResult(null);
+  if (!selectedBrand || !copyText) return;
+  setLoading(true);
+  setResult(null);
 
-        try {
-            const res = await fetch(`${API_BASE}/rewrite`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    brand_id: selectedBrand.brand_id,
-                    text: copyText,
-                    n_grounding_chunks: 3
-                })
-            });
-            const data = await res.json();
-            setResult(data);
-        } catch (err) {
-            console.error(err);
-            setResult({ error: "Network error connecting to the engine." });
-        }
-        setLoading(false);
-    };
+  try {
+    const res = await fetch(`${API_BASE}/check-consistency`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        brand_id: selectedBrand.brand_id,
+        text: copyText,
+      }),
+    });
 
-    return (
-        <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both max-w-6xl mx-auto">
+    const data = await res.json();
 
-            <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
-                <div className="flex items-center gap-5">
-                    <div className="p-3.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-[0_0_30px_rgba(99,102,241,0.3)] text-white border border-indigo-400/30">
-                        <Sparkles size={28} />
-                    </div>
+    if (!res.ok || data?.error) {
+      setResult({ error: data?.error || "Failed to score text." });
+      setLoading(false);
+      return;
+    }
+
+    // Shape into the old rewrite response so the existing UI doesn't crash
+    setResult({
+      score_before: data,
+      score_after: data, // same for now (no rewrite in demo)
+      rewritten_text: "",
+      suggestions: [],
+      grounding_chunks_used: [],
+      error: null,
+    });
+  } catch (err) {
+    console.error(err);
+    setResult({ error: "Network error connecting to the engine." });
+  }
+
+  setLoading(false);
+};
+
+   return (
+       <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both max-w-6xl mx-auto">
+
+           <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
+               <div className="flex items-center gap-5">
+                   <div className="p-3.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-[0_0_30px_rgba(99,102,241,0.3)] text-white border border-indigo-400/30">
+                       <Sparkles size={28} />
+                   </div>
                     <div>
-                        <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Rewrite Engine</h2>
+                        <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Analysis Engine</h2> {/*Later change to Rewrite Engine*/}
                         <p className="text-gray-400 mt-2 text-lg">Align and elevate copy perfectly to the brand genome.</p>
                     </div>
                 </div>
@@ -110,16 +128,16 @@ export const ConsistencyCheck = () => {
                             className="font-mono text-sm leading-relaxed mb-6"
                         />
                         <Button primary className="w-full text-lg gap-3 py-4" onClick={handleRewrite} disabled={loading || !selectedBrand || copyText.length < 5}>
-                            {loading ? <Loader2 className="animate-spin" /> : <><Sparkles size={20} /> Ground & Rewrite</>}
+                            {loading ? <Loader2 className="animate-spin" /> : <><Sparkles size={20} /> Analyze Consistency </>} {/* Later change to Ground & Rewrite */}
                         </Button>
 
                         {/* RAG Examples Accordion */}
-                        {result && !result.error && (
+                        {ENABLE_REWRITE_UI && result && !result.error && (
                             <GroundingExamples chunks={result.grounding_chunks_used} />
                         )}
                     </Card>
 
-                    {result && !result.error && (
+                    {ENABLE_REWRITE_UI && result && !result.error && (
                         <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                             <SuggestionsPanel suggestions={result.suggestions} />
                             <RewritePanel text={result.rewritten_text} />
@@ -149,7 +167,7 @@ export const ConsistencyCheck = () => {
                                     </div>
                                 </div>
                                 <div className="text-right">
-                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">After Rewrite</p>
+                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Analysis Score</p> {/*Later change to After Rewrite*/}
                                     <div className="text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
                                         {result.score_after?.overall_score}<span className="text-xl text-indigo-400">/100</span>
                                     </div>
@@ -159,26 +177,26 @@ export const ConsistencyCheck = () => {
                             <div className="space-y-8">
                                 <DualMetricBar
                                     label="Tone Resonance"
-                                    beforeVal={result.score_before?.tone_pct}
-                                    afterVal={result.score_after?.tone_pct}
+                                    beforeVal={result.score_before?.tone_pct ?? 0}
+                                    afterVal={result.score_after?.tone_pct ?? 0}
                                     baseColor="from-amber-400 to-orange-500"
                                 />
                                 <DualMetricBar
                                     label="Vocabulary Overlap"
-                                    beforeVal={result.score_before?.vocab_overlap_pct}
-                                    afterVal={result.score_after?.vocab_overlap_pct}
+                                    beforeVal={result.score_before?.vocab_overlap_pct ?? 0}
+                                    afterVal={result.score_after?.vocab_overlap_pct ?? 0}
                                     baseColor="from-indigo-500 to-blue-500"
                                 />
                                 <DualMetricBar
                                     label="Sentiment Alignment"
-                                    beforeVal={result.score_before?.sentiment_alignment_pct}
-                                    afterVal={result.score_after?.sentiment_alignment_pct}
+                                    beforeVal={result.score_before?.sentiment_alignment_pct ?? 0}
+                                    afterVal={result.score_after?.sentiment_alignment_pct ?? 0}
                                     baseColor="from-emerald-400 to-teal-500"
                                 />
                                 <DualMetricBar
                                     label="Readability Match"
-                                    beforeVal={result.score_before?.readability_match_pct}
-                                    afterVal={result.score_after?.readability_match_pct}
+                                    beforeVal={result.score_before?.readability_match_pct ?? 0}
+                                    afterVal={result.score_after?.readability_match_pct ?? 0}
                                     baseColor="from-purple-500 to-pink-500"
                                 />
                             </div>

@@ -80,51 +80,24 @@ def get_db_connection():
         return None
 
 
-# ── Brand-profile loader (DB → fallback) ─────────────────────────────────
+# ── Brand-profile loader (DB-only, no silent fallback) ────────────────────
 
 _FALLBACK_BRANDS = [
     {"brand_id": "rolex", "brand_name": "Rolex"},
     {"brand_id": "omega", "brand_name": "Omega"},
     {"brand_id": "tag_heuer", "brand_name": "TAG Heuer"},
     {"brand_id": "tissot", "brand_name": "Tissot"},
-    {"brand_id": "titan", "brand_name": "Titan"},
+    {"brand_id": "cartier", "brand_name": "Cartier"},
+    {"brand_id": "breitling", "brand_name": "Breitling"},
+    {"brand_id": "hublot", "brand_name": "Hublot"},
+    {"brand_id": "iwc", "brand_name": "IWC Schaffhausen"},
+    {"brand_id": "patek_phillipe", "brand_name": "Patek Phillipe"},
+    {"brand_id": "audemars", "brand_name": "Audemars Piguet"},
 ]
 
-_FALLBACK_PROFILES: dict[str, dict] = {
-    "rolex": {
-        "brand_id": "rolex", "brand_name": "Rolex",
-        "top_keywords": ["precision", "excellence", "craftsmanship", "perpetual", "oyster"],
-        "tone_label": "authoritative",
-        "avg_sentiment": 0.72, "avg_formality": 0.75, "avg_readability_flesch": 45.0,
-    },
-    "omega": {
-        "brand_id": "omega", "brand_name": "Omega",
-        "top_keywords": ["precision", "heritage", "innovation", "seamaster", "speedmaster"],
-        "tone_label": "confident",
-        "avg_sentiment": 0.70, "avg_formality": 0.70, "avg_readability_flesch": 48.0,
-    },
-    "tag_heuer": {
-        "brand_id": "tag_heuer", "brand_name": "TAG Heuer",
-        "top_keywords": ["precision", "performance", "avant-garde", "racing", "bold"],
-        "tone_label": "dynamic",
-        "avg_sentiment": 0.68, "avg_formality": 0.60, "avg_readability_flesch": 52.0,
-    },
-    "tissot": {
-        "brand_id": "tissot", "brand_name": "Tissot",
-        "top_keywords": ["innovation", "tradition", "swiss", "quality", "accessible"],
-        "tone_label": "approachable",
-        "avg_sentiment": 0.65, "avg_formality": 0.55, "avg_readability_flesch": 55.0,
-    },
-    "titan": {
-        "brand_id": "titan", "brand_name": "Titan",
-        "top_keywords": ["style", "trust", "design", "craftsmanship", "everyday"],
-        "tone_label": "friendly",
-        "avg_sentiment": 0.63, "avg_formality": 0.45, "avg_readability_flesch": 60.0,
-    },
-}
 
-
-def get_brand_profile(brand_id: str) -> dict:
+def get_brand_profile(brand_id: str) -> Optional[dict]:
+    """Return the brand profile dict from the DB, or *None* if not found."""
     conn = get_db_connection()
     if conn:
         try:
@@ -137,19 +110,7 @@ def get_brand_profile(brand_id: str) -> dict:
             logger.error(f"DB Error fetching profile: {e}")
         finally:
             conn.close()
-
-    # Fallback profile
-    return _FALLBACK_PROFILES.get(
-        brand_id,
-        {
-            "brand_id": brand_id,
-            "brand_name": brand_id.replace("_", " ").title(),
-            "top_keywords": ["precision", "excellence", "craft"],
-            "tone_label": "authoritative",
-            "avg_sentiment": 0.5, "avg_formality": 0.5,
-            "avg_readability_flesch": 50.0,
-        },
-    )
+    return None
 
 
 # ── RAG: grounding chunks retrieval ──────────────────────────────────────
@@ -333,6 +294,13 @@ def check_consistency(req: ConsistencyCheckRequest):
         }
 
     brand_profile = get_brand_profile(req.brand_id)
+    if brand_profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "profile_missing",
+                    "brand_id": req.brand_id},
+        )
+
     scores = compute_consistency_score(req.text, brand_profile)
     _record_analysis(scores["overall_score"])
 
@@ -355,11 +323,16 @@ def rewrite(req: RewriteRequest):
             "suggestions": [],
             "grounding_chunks_used": [],
             "score_before": None,
-            "score_after": None,
-            "error": "text_too_short",
+            "score_after": None,            "error": "text_too_short",
         }
 
     brand_profile = get_brand_profile(req.brand_id)
+    if brand_profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "profile_missing",
+                    "brand_id": req.brand_id},
+        )
     brand_name = brand_profile.get("brand_name", req.brand_id.replace("_", " ").title())
 
     # 1. Score Before (real NLP scoring)
@@ -566,6 +539,11 @@ def run_benchmark(req: BenchmarkRequest):
     """
     my_profile = get_brand_profile(req.my_brand.lower().replace(" ", "_"))
     comp_profile = get_brand_profile(req.competitor.lower().replace(" ", "_"))
+
+    if my_profile is None:
+        raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.my_brand})
+    if comp_profile is None:
+        raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.competitor})
 
     # Build per-dimension scores from profiles
     def _profile_scores(p: dict) -> dict:

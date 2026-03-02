@@ -1,5 +1,7 @@
 """
-consistency.py – Canonical brand-consistency scorer.
+consistency.py –* **readability_match_pct** – Gaussian similarity on Flesch score vs profile mean.
+* **tone_pct** – Gaussian similarity on formality vs profile mean.
+  (Cosine embedding similarity reserved for offline batch pipeline.)nical brand-consistency scorer.
 
 Public API
 ----------
@@ -168,6 +170,7 @@ def compute_consistency_score(text: str, brand_profile: dict[str, Any]) -> dict[
     mean_flesch = _float(bp, "mean_flesch", _float(bp, "avg_readability_flesch", 50.0))
     std_flesch = _float(bp, "std_flesch", 10.0)
     mean_formality = _float(bp, "mean_formality", _float(bp, "avg_formality", 0.5))
+    std_formality = _float(bp, "std_formality", 0.05)
     brand_keywords: list[str] = bp.get("top_keywords", []) or []
 
     # ── 1) Vocabulary overlap (Jaccard) ───────────────────────────────────
@@ -176,12 +179,11 @@ def compute_consistency_score(text: str, brand_profile: dict[str, Any]) -> dict[
     # ── 2) Sentiment alignment (Gaussian) ─────────────────────────────────
     sentiment_align = _gaussian_similarity(text_sentiment, mean_sentiment, std_sentiment)
 
-    # ── 3) Readability match (inverse distance) ──────────────────────────
-    tolerance = max(2.0 * std_flesch, 20.0)
-    readability = _inverse_distance(text_flesch, mean_flesch, tolerance)
+    # ── 3) Readability match (Gaussian) ───────────────────────────────────
+    readability = _gaussian_similarity(text_flesch, mean_flesch, max(std_flesch, 5.0))
 
-    # ── 4) Tone (formality-distance proxy) ──────────────────────────────
-    tone = max(0.0, 1.0 - abs(text_formality - mean_formality))
+    # ── 4) Tone (Gaussian formality-distance) ─────────────────────────────
+    tone = _gaussian_similarity(text_formality, mean_formality, max(std_formality, 0.01))
 
     # ── Overall (weighted average from spec) ──────────────────────────────
     overall = (
