@@ -72,7 +72,17 @@ export const ConsistencyCheck = () => {
     const data = await res.json();
 
     if (!res.ok || data?.error) {
-      setResult({ error: data?.error || "Failed to score text." });
+      // FastAPI HTTPException wraps errors in { detail: { error: "..." } }
+      const rawErr =
+        data?.error ||
+        data?.detail?.error ||
+        (typeof data?.detail === "string" ? data.detail : null) ||
+        "unknown";
+      const friendlyErrors = {
+        profile_missing: "No brand profile found for this brand. Please select a valid brand.",
+        text_too_short: "Text is too short to analyze. Please enter at least 10 words.",
+      };
+      setResult({ error: friendlyErrors[rawErr] || rawErr });
       setLoading(false);
       return;
     }
@@ -163,13 +173,13 @@ export const ConsistencyCheck = () => {
                                 <div>
                                     <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Before Score</p>
                                     <div className="text-4xl font-black text-gray-300">
-                                        {result.score_before?.overall_score}<span className="text-xl text-gray-600">/100</span>
+                                        {result.score_before?.overall_score ?? 0}<span className="text-xl text-gray-600">/100</span>
                                     </div>
                                 </div>
                                 <div className="text-right">
                                     <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Analysis Score</p> {/*Later change to After Rewrite*/}
                                     <div className="text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
-                                        {result.score_after?.overall_score}<span className="text-xl text-indigo-400">/100</span>
+                                        {result.score_after?.overall_score ?? 0}<span className="text-xl text-indigo-400">/100</span>
                                     </div>
                                 </div>
                             </div>
