@@ -94,9 +94,19 @@ source venv/bin/activate  # On Windows use: venv\Scripts\activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Start the API server
+# 3. Build brand profiles (populates data/brand_data.db → brand_profiles table)
+python -m scripts.build_brand_profiles --db-path data/brand_data.db
+
+# 4. Validate the database (all checks must pass)
+python -m scripts.validate_db --db-path data/brand_data.db
+
+# 5. Start the API server
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> **Tip:** To skip slow embedding computation, add `--no-embeddings` to the
+> profile builder command. Profiles will work but `embedding_status` will be
+> `"missing"` instead of `"ok"`.
 
 #### Start the Frontend
 Open a **new terminal window**:

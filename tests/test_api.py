@@ -56,7 +56,8 @@ class TestBrands:
     def test_fallback_brands_present(self):
         r = client.get("/api/brands")
         ids = {b["brand_id"] for b in r.json()["brands"]}
-        for expected in ("rolex", "omega", "tag_heuer", "tissot", "titan"):
+        # These brands exist in both the DB profiles and the fallback list
+        for expected in ("rolex", "omega", "tag_heuer", "tissot"):
             assert expected in ids, f"{expected} missing from brands list"
 
 

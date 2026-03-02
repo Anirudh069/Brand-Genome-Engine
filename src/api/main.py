@@ -64,6 +64,13 @@ app.add_middleware(
 # ── Database helpers ──────────────────────────────────────────────────────
 
 def get_db_connection():
+    if not Path(SQLITE_DB_PATH).exists():
+        logger.error(
+            "Database file not found: %s  "
+            "(set SQLITE_DB_PATH or ensure data/brand_data.db exists)",
+            SQLITE_DB_PATH,
+        )
+        return None
     try:
         conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
         conn.row_factory = sqlite3.Row

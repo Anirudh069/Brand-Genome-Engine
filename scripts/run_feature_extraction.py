@@ -6,7 +6,7 @@ and write a Parquet file ready for downstream ML / indexing.
 Usage examples
 --------------
   # From the default DB
-  python -m scripts.run_feature_extraction --db watches.db --out data/processed/features.parquet
+  python -m scripts.run_feature_extraction --out data/processed/features.parquet
 
   # From a CSV override
   python -m scripts.run_feature_extraction --csv raw_texts_watches.csv --out features.parquet --limit 100
@@ -186,8 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--db",
-        default="watches.db",
-        help="Path to SQLite database (default: watches.db)",
+        default=os.getenv("SQLITE_DB_PATH", "data/brand_data.db"),
+        help="Path to SQLite database (default: data/brand_data.db)",
     )
     parser.add_argument(
         "--table",

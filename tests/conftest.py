@@ -16,6 +16,10 @@ import logging
 
 import pytest
 
+# ── Skip dormant teammate files with spaces in their names ────────────────
+# These are drag-dropped drafts that import non-existent modules.
+collect_ignore_glob = ["*scoring (1)*", "* (1)*"]
+
 # Disable tokenizers parallelism to prevent fork-related deadlocks
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
