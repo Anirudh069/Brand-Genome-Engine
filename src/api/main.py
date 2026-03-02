@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Real scoring & edit-plan from our pipeline
-from src.api.scoring import score_consistency, generate_edit_plan
+# Canonical scorer (src/scoring/consistency.py)
+from src.scoring.consistency import compute_consistency_score, generate_edit_plan
 
 # Optional: retrieval index for benchmarking
 try:
@@ -333,7 +333,7 @@ def check_consistency(req: ConsistencyCheckRequest):
         }
 
     brand_profile = get_brand_profile(req.brand_id)
-    scores = score_consistency(req.text, brand_profile)
+    scores = compute_consistency_score(req.text, brand_profile)
     _record_analysis(scores["overall_score"])
 
     return {
@@ -363,7 +363,7 @@ def rewrite(req: RewriteRequest):
     brand_name = brand_profile.get("brand_name", req.brand_id.replace("_", " ").title())
 
     # 1. Score Before (real NLP scoring)
-    score_before = score_consistency(req.text, brand_profile)
+    score_before = compute_consistency_score(req.text, brand_profile)
 
     # 2. Generate Edit Plan (real NLP analysis)
     edit_plan = generate_edit_plan(req.text, brand_profile)
@@ -427,7 +427,7 @@ def rewrite(req: RewriteRequest):
         )
 
     # 5. Score After (re-score the rewritten text with real NLP)
-    score_after = score_consistency(rewritten_text, brand_profile)    # Build suggestions from edit plan
+    score_after = compute_consistency_score(rewritten_text, brand_profile)    # Build suggestions from edit plan
     prefer_terms_str = ', '.join(edit_plan.get('prefer_terms', [])[:3])
     tone_dir_str = edit_plan.get('tone_direction', '')
     suggestions_list = [

@@ -128,6 +128,9 @@ npm run dev
 ```text
 brand-genome-engine/
 ├── data/                  # SQLite databases and raw training data
+│   └── brand_data.db      # Canonical DB (brand_texts, brand_profiles)
+├── docs/
+│   └── scoring_spec.md    # Canonical scoring algorithm specification
 ├── embeddings/            # FAISS vector indexes for RAG
 ├── frontend/              # Vite + React Application
 │   ├── src/
@@ -135,10 +138,20 @@ brand-genome-engine/
 │   │   ├── lib/           # Utility functions and API constants
 │   │   └── pages/         # Top-level route modules (Analytics, Setup, etc.)
 │   └── package.json       # Node dependencies
+├── scripts/
+│   ├── build_brand_profiles.py   # Builds brand_profiles table in DB
+│   └── validate_db.py            # DB integrity checks
 ├── src/
-│   ├── api/               # FastAPI route definitions and models
-│   │   └── main.py        # Core application entrypoint
-│   └── pipeline/          # (Team components) Feature extraction & FAISS scripts
+│   ├── api/
+│   │   └── main.py        # FastAPI routes (imports from src.scoring)
+│   ├── feature_extraction/ # Sentiment, formality, readability extractors
+│   ├── scoring/
+│   │   └── consistency.py  # ★ Canonical scorer (compute_consistency_score)
+│   └── benchmarking/       # FAISS retrieval for competitor benchmarking
+├── tests/
+│   ├── test_api.py         # API integration tests (40 tests)
+│   ├── test_scoring.py     # Scorer contract tests (17 tests)
+│   └── ...                 # Feature extractor unit tests
 ├── .env                   # Environment secrets config
 ├── docker-compose.yml     # Orchestration
 └── requirements.txt       # Python backend dependencies
