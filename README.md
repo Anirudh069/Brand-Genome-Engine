@@ -57,16 +57,16 @@ The domain dataset that ships with the repo covers **10 luxury-watch brands** (R
 
 ```mermaid
 flowchart LR
-    subgraph Offline Pipeline
+    subgraph Offline_Pipeline [Offline Pipeline]
         A[Raw CSV / Scraped Text] -->|data_ingestion_pipeline.py| B[(brand_data.db)]
         B -->|build_brand_profiles.py| C[brand_profiles table]
         B -->|run_feature_extraction.py| D[features.parquet]
         D -->|build_embeddings_index.py| E[FAISS Index]
     end
 
-    subgraph Runtime — FastAPI
+    subgraph Runtime_FastAPI [Runtime - FastAPI]
         F[User Text] --> G[Consistency Scorer]
-        G -->|sentiment, formality,\nreadability, vocabulary| H{Score 0–100}
+        G -->|sentiment, formality, readability, vocabulary| H{Score 0-100}
         H --> I[API Response]
 
         F --> J[Edit Plan Generator]
@@ -77,7 +77,7 @@ flowchart LR
         N --> G
     end
 
-    subgraph Frontend — React / Vite
+    subgraph Frontend_React [Frontend - React / Vite]
         O[Genome Setup] --> P[Consistency Check]
         P --> Q[Market Benchmarking]
         Q --> R[Analytics Dashboard]
