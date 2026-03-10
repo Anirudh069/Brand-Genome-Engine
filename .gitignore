@@ -19,6 +19,7 @@ env/
 
 # ── Data / Artefacts ────────────────────────────────
 *.db
+!data/brand_data.db
 data/processed/
 embeddings/*.faiss
 embeddings/*.pkl
