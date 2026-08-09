@@ -21,11 +21,8 @@ from pathlib import Path
 DEFAULT_DB_PATH = os.getenv("SQLITE_DB_PATH", "data/brand_data.db")
 
 REQUIRED_TABLES = {"brand_texts_raw", "brand_texts", "brand_chunks", "brand_profiles"}
-EXPECTED_COUNTS = {
-    "brand_texts_raw": 150,
-    "brand_texts": 150,
-    "brand_chunks": 150,
-}
+MIN_TEXTS_PER_BRAND = 30
+MIN_CHUNKS_PER_BRAND = 50
 REQUIRED_PROFILE_KEYS = {"top_keywords", "mean_sentiment", "mean_flesch"}
 
 
@@ -63,21 +60,33 @@ def run_checks(db_path):
     else:
         _ok(f"All required tables present: {sorted(REQUIRED_TABLES)}")
 
-    # Check B: Row counts
+    # Check B: Row counts (Phase 4 thresholds - per-brand minimums, not fixed totals)
     print()
     print("[B] Row counts")
-    for table, expected in EXPECTED_COUNTS.items():
+    for table in ("brand_texts_raw", "brand_texts", "brand_chunks"):
         if table not in tables:
             _fail(f"{table} - table missing")
             all_ok = False
             continue
         cur.execute(f"SELECT COUNT(*) FROM [{table}]")
         actual = cur.fetchone()[0]
-        if actual != expected:
-            _fail(f"{table}: expected {expected}, got {actual}")
+        _ok(f"{table} = {actual}")
+
+    for table, min_per_brand in (
+        ("brand_texts", MIN_TEXTS_PER_BRAND),
+        ("brand_chunks", MIN_CHUNKS_PER_BRAND),
+    ):
+        if table not in tables:
+            continue
+        cur.execute(f"SELECT brand_id, COUNT(*) FROM [{table}] GROUP BY brand_id")
+        per_brand = dict(cur.fetchall())
+        below = {b: n for b, n in per_brand.items() if n < min_per_brand}
+        if below:
+            _fail(f"{table}: brands below minimum {min_per_brand}/brand: {below}")
             all_ok = False
         else:
-            _ok(f"{table} = {actual}")
+            lowest = min(per_brand.values()) if per_brand else 0
+            _ok(f"{table}: all {len(per_brand)} brands >= {min_per_brand} (lowest={lowest})")
 
     if "brand_profiles" in tables:
         cur.execute("SELECT COUNT(*) FROM brand_profiles")
