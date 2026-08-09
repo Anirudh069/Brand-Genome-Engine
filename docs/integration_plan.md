@@ -4,6 +4,8 @@
 **Commit baseline:** `359f6c3` (main)  
 **Status:** Plan only — no code changes
 
+> **2026-08-09 update:** The DB-consolidation direction described below (Section 4.2 — make root `brand_data.db` canonical, delete `data/brand_data.db`) was superseded. The database situation was canonicalized the other way: `data/brand_data.db` is now the single canonical DB (450 texts, 10 brands), and the root `brand_data.db` file has been deleted. Treat any instruction in this doc to point `SQLITE_DB_PATH` at root `brand_data.db` as stale.
+
 ---
 
 ## 1. Executive Summary
