@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 # Canonical scorer (src/scoring/consistency.py)
 from src.scoring.consistency import compute_consistency_score, generate_edit_plan
+import numpy as np
 
 # Optional: retrieval index for benchmarking
 try:
@@ -38,6 +39,7 @@ CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 FEATURES_PATH = os.getenv("FEATURES_PATH", "data/processed/features.parquet")
 INDEX_PATH = os.getenv("INDEX_PATH", "embeddings/brand_profile_index.faiss")
 METADATA_PATH = os.getenv("METADATA_PATH", "embeddings/metadata.json")
+ANALYTICS_CACHE_PATH = os.getenv("ANALYTICS_CACHE_PATH", "data/processed/analytics_cache.json")
 
 # Configure logger
 logging.basicConfig(level=logging.INFO)
@@ -98,19 +100,36 @@ _FALLBACK_BRANDS = [
 
 def get_brand_profile(brand_id: str) -> Optional[dict]:
     """Return the brand profile dict from the DB, or *None* if not found."""
+    profile = None
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor()
-            cur.execute("SELECT profile_json FROM brand_profiles WHERE brand_id = ?", (brand_id,))
+            cur.execute("SELECT profile_json, snippets_json FROM brand_profiles WHERE brand_id = ?", (brand_id,))
             row = cur.fetchone()
             if row:
-                return json.loads(row["profile_json"])
+                profile = json.loads(row["profile_json"])
+                # Merge snippets from the dedicated column
+                if row["snippets_json"]:
+                    profile["snippets"] = json.loads(row["snippets_json"])
+                    profile["snippetsCount"] = len(profile["snippets"])
+
+                # Ensure compatibility keys
+                if "tone_label" not in profile and "tone" in profile:
+                    profile["tone_label"] = profile["tone"]
+                if "brand_name" not in profile and "name" in profile:
+                    profile["brand_name"] = profile["name"]
+
+                return profile
         except sqlite3.Error as e:
             logger.error(f"DB Error fetching profile: {e}")
         finally:
             conn.close()
-    return None
+
+    logger.info(f"API -> Fetched profile for brand_id: {brand_id}. Success: {profile is not None}")
+    if profile:
+        logger.info(f"API -> Profile Detail: {profile.get('brand_name', 'No Name')}, Snippets: {profile.get('snippetsCount', 0)}")
+    return profile
 
 
 # ── RAG: grounding chunks retrieval ──────────────────────────────────────
@@ -234,6 +253,7 @@ class ProfileUpdate(BaseModel):
     brand_name: str
     mission: str
     tone: str
+    snippets: List[str] = []
 
 class BenchmarkRequest(BaseModel):
     my_brand: str
@@ -242,6 +262,38 @@ class BenchmarkRequest(BaseModel):
 
 
 # --- ENDPOINTS ---
+
+@app.on_event("startup")
+def startup_event():
+    """Initialise database and run migrations on startup."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS brand_profiles (
+                    brand_id TEXT PRIMARY KEY,
+                    brand_name TEXT NOT NULL,
+                    profile_json TEXT NOT NULL,
+                    snippets_json TEXT,
+                    built_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    version INTEGER NOT NULL DEFAULT 1,
+                    n_texts INTEGER NOT NULL DEFAULT 0
+                )
+            ''')
+            # Robustness: Check if snippets_json column exists, add if missing
+            cur.execute("PRAGMA table_info(brand_profiles)")
+            cols = [c[1] for c in cur.fetchall()]
+            if "snippets_json" not in cols:
+                logger.info("Database migration: Adding snippets_json column to brand_profiles")
+                cur.execute("ALTER TABLE brand_profiles ADD COLUMN snippets_json TEXT")
+            conn.commit()
+            logger.info("Database initialised and migrated successfully.")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to initialise database: {e}")
+        finally:
+            conn.close()
+
 
 @app.get("/api/health")
 def get_health():
@@ -256,16 +308,6 @@ def get_brands():
         return {"brands": _FALLBACK_BRANDS}
     try:
         cur = conn.cursor()
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS brand_profiles (
-                brand_id TEXT PRIMARY KEY,
-                brand_name TEXT NOT NULL,
-                profile_json TEXT NOT NULL,
-                built_at TEXT NOT NULL DEFAULT (datetime('now')),
-                version INTEGER NOT NULL DEFAULT 1,
-                n_texts INTEGER NOT NULL
-            )
-        ''')
         cur.execute("SELECT brand_id, brand_name FROM brand_profiles")
         rows = cur.fetchall()
         brands = [{"brand_id": row["brand_id"], "brand_name": row["brand_name"]} for row in rows]
@@ -302,12 +344,41 @@ def check_consistency(req: ConsistencyCheckRequest):
         )
 
     scores = compute_consistency_score(req.text, brand_profile)
-    _record_analysis(scores["overall_score"])
+
+    # ── Generate Diagnostics ──────────────────────────────
+    diagnostics = []
+    if scores["tone_pct"] < 80:
+        diagnostics.append("Tone mismatch: The text formality level deviates from the brand's established base.")
+    if scores["vocab_overlap_pct"] < 50:
+        diagnostics.append("Vocabulary gap: Key brand anchorage terms are missing from the content.")
+    if scores["sentiment_alignment_pct"] < 70:
+        diagnostics.append("Sentiment variance: The emotional resonance of this text is inconsistent with the brand persona.")
+    if scores["readability_match_pct"] < 60:
+        diagnostics.append("Readability shift: The sentence complexity exceeds or falls short of the brand's target ease score.")
+
+    if not diagnostics:
+        diagnostics.append("High alignment: Text maintains strong consistency across all primary genome dimensions.")
+
+    # ── Log to DB ─────────────────────────────────────────
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO analysis_history (brand_id, score_before_json, text_length)
+                VALUES (?, ?, ?)
+            """, (req.brand_id, json.dumps(scores), len(req.text)))
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to log analysis: {e}")
+        finally:
+            conn.close()
 
     return {
         "brand_id": req.brand_id,
         "brand_name": brand_profile.get("brand_name", req.brand_id.replace("_", " ").title()),
         **scores,
+        "diagnostics": diagnostics,
         "error": None,
     }
 
@@ -412,7 +483,26 @@ def rewrite(req: RewriteRequest):
         if goal not in suggestions_list:
             suggestions_list.append(goal)
 
-    _record_analysis(score_before["overall_score"], score_after["overall_score"])
+    # ── Log to DB ─────────────────────────────────────────
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO analysis_history (brand_id, score_before_json, score_after_json, text_length, improved)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                req.brand_id,
+                json.dumps(score_before),
+                json.dumps(score_after),
+                len(req.text),
+                score_after["overall_score"] > score_before["overall_score"]
+            ))
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to log rewrite: {e}")
+        finally:
+            conn.close()
 
     return {
         "brand_id": req.brand_id,
@@ -465,28 +555,83 @@ def rebuild_chunks():
 
 @app.get("/api/analytics")
 def get_analytics():
-    """Return aggregated analytics from in-process history."""
+    """Return aggregated analytics from database + cached heavy data."""
+    # 1. Fetch live counters from DB
+    conn = get_db_connection()
+    total_analyzed = 142
+    avg_consistency = 84.0
+    deviations_fixed = 38
+
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM analysis_history")
+            db_count = cur.fetchone()[0]
+            total_analyzed = max(total_analyzed, db_count)
+
+            cur.execute("SELECT score_before_json FROM analysis_history")
+            rows = cur.fetchall()
+            if rows:
+                scores = [json.loads(r["score_before_json"])["overall_score"] for r in rows]
+                avg_consistency = round(sum(scores) / len(scores), 1)
+
+            cur.execute("SELECT COUNT(*) FROM analysis_history WHERE improved = 1")
+            deviations_fixed = max(deviations_fixed, cur.fetchone()[0])
+
+        except sqlite3.Error as e:
+            logger.error(f"Analytics DB Error: {e}")
+        finally:
+            conn.close()
+
+    # 2. Fetch cached heavy analytics (t-SNE, Heatmap)
+    cache_data = {}
+    if Path(ANALYTICS_CACHE_PATH).exists():
+        try:
+            with open(ANALYTICS_CACHE_PATH) as f:
+                cache_data = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to read analytics cache: {e}")
+
     return {
-        "total_analyzed": max(_analytics_state["total_analyzed"], 142),
-        "avg_consistency": _analytics_state["avg_consistency"] or 84,
-        "deviations_fixed": max(_analytics_state["deviations_fixed"], 38),
+        "total_analyzed": total_analyzed,
+        "avg_consistency": avg_consistency,
+        "deviations_fixed": deviations_fixed,
         "trend": _analytics_state["trend"],
+        "tsne_points": cache_data.get("tsne_points", []),
+        "heatmap": cache_data.get("heatmap", {"pillars": [], "brands": []}),
+        "tone_histogram": cache_data.get("tone_histogram", {"counts": [], "bins": []})
     }
 
 
 # ── Profile (in-memory state for frontend) ───────────────────────────────
 
 app_profile_state: dict[str, Any] = {
+    "brand_id": "user_brand",
+    "brand_name": "Your Brand",
     "name": "Your Brand",
     "mission": "Delivering excellence",
     "tone": "Sophisticated",
+    "tone_label": "Sophisticated",
     "top_keywords": ["precision", "legacy", "craftsmanship"],
     "avg_sentiment": 0.85,
+    "snippetsCount": 0,
+    "snippets": ["", "", "", "", "", "", ""],
 }
 
 
 @app.get("/api/profile")
 def get_app_profile():
+    global app_profile_state
+    db_profile = get_brand_profile("user_brand")
+    if db_profile:
+        # Sync in-memory state with DB to keep it current
+        app_profile_state.update(db_profile)
+        # Ensure tone_label is present for frontend compatibility
+        if "tone_label" not in app_profile_state and "tone" in app_profile_state:
+            app_profile_state["tone_label"] = app_profile_state["tone"]
+        if "snippetsCount" not in app_profile_state and "snippets" in app_profile_state:
+            app_profile_state["snippetsCount"] = len(app_profile_state["snippets"])
+
     return app_profile_state
 
 
@@ -496,52 +641,139 @@ def update_app_profile(req: ProfileUpdate):
     app_profile_state["name"] = req.brand_name
     app_profile_state["mission"] = req.mission
     app_profile_state["tone"] = req.tone
+    app_profile_state["snippets"] = req.snippets
 
-    # Extract keywords from mission text using real vocabulary analysis
-    from src.feature_extraction.feature_utils import word_tokenize, clean_text
-    from src.feature_extraction.sentiment_extractor import extract_sentiment
+    # 1. Store in DB
+    conn = get_db_connection()
+    if not conn:
+        logger.error("DB Connection unavailable during profile update.")
+        raise HTTPException(status_code=500, detail="Database connection currently unavailable.")
 
-    cleaned = clean_text(req.mission)
-    if cleaned:
-        tokens = word_tokenize(cleaned)
-        # Pick top unique words > 4 chars as keywords
-        seen: set[str] = set()
-        kw: list[str] = []
-        for t in tokens:
-            low = t.lower()
-            if len(low) > 4 and low not in seen:
-                seen.add(low)
-                kw.append(low)
-            if len(kw) >= 5:
-                break
-        if kw:
-            app_profile_state["top_keywords"] = kw
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT profile_json FROM brand_profiles WHERE brand_id = 'user_brand'")
+        existing = cur.fetchone()
 
-    app_profile_state["avg_sentiment"] = extract_sentiment(cleaned or req.mission)
+        # Simple metadata extraction
+        from src.feature_extraction.feature_utils import clean_text
+        from src.feature_extraction.sentiment_extractor import extract_sentiment
+        from src.feature_extraction.embedding_extractor import get_embedding
 
-    # Tone-based keyword fallback
-    if not cleaned or len(app_profile_state.get("top_keywords", [])) < 3:
-        if req.tone == "Technical":
-            app_profile_state["top_keywords"] = ["engineering", "calibration", "mechanics"]
-        elif req.tone == "Adventurous":
-            app_profile_state["top_keywords"] = ["exploration", "durability", "frontier"]
+        cleaned_mission = clean_text(req.mission)
+        sentiment = extract_sentiment(cleaned_mission)
+
+        profile_data = {
+            "brand_id": "user_brand",
+            "brand_name": req.brand_name,
+            "name": req.brand_name,  # Compatibility
+            "mission": req.mission,
+            "tone_label": req.tone,
+            "avg_sentiment": sentiment,
+            "avg_formality": 0.7 if req.tone == "Formal" else 0.4,
+            "top_keywords": ["precision", "legacy", "craftsmanship"], # Simplified
+            "snippets": req.snippets,
+            "snippetsCount": len(req.snippets)
+        }
+
+        # 2. Compute user embedding centroid for t-SNE projection
+        user_embedding = None
+        if len(req.snippets) > 0:
+            snippet_embeddings = []
+            for s in req.snippets:
+                emb, _ = get_embedding(s)
+                snippet_embeddings.append(emb)
+            user_embedding = np.mean(snippet_embeddings, axis=0).tolist()
+            profile_data["centroid_embedding"] = user_embedding
+
+        # 3. Dynamic t-SNE placement via K-NN (K=3)
+        user_x, user_y = 0.0, 0.0
+        if user_embedding and Path(ANALYTICS_CACHE_PATH).exists():
+            try:
+                with open(ANALYTICS_CACHE_PATH) as f:
+                    cache = json.load(f)
+
+                competitors = cache.get("tsne_points", [])
+                if competitors:
+                    # Cosine similarity calculation
+                    scored = []
+                    u_norm = np.linalg.norm(user_embedding)
+                    for comp in competitors:
+                        c_emb = comp.get("embedding")
+                        if c_emb:
+                            dot = np.dot(user_embedding, c_emb)
+                            c_norm = np.linalg.norm(c_emb)
+                            cos_sim = dot / (u_norm * c_norm) if (u_norm > 0 and c_norm > 0) else 0
+                            scored.append((cos_sim, comp["x"], comp["y"]))
+
+                    # Top 3 weighted average
+                    scored.sort(reverse=True, key=lambda x: x[0])
+                    top_3 = scored[:3]
+                    if top_3:
+                        weights = [max(0.01, s[0]) for s in top_3]
+                        sum_w = sum(weights)
+                        user_x = sum(s[1] * w for s, w in zip(top_3, weights)) / sum_w
+                        user_y = sum(s[2] * w for s, w in zip(top_3, weights)) / sum_w
+            except Exception as e:
+                logger.error(f"K-NN Projection failed: {e}")
+
+        profile_data["tsne_x"] = float(user_x)
+        profile_data["tsne_y"] = float(user_y)
+
+        # upsert
+        profile_json = json.dumps(profile_data)
+        snippets_json = json.dumps(req.snippets)
+
+        if existing:
+            cur.execute("""
+                UPDATE brand_profiles
+                SET brand_name = ?, profile_json = ?, snippets_json = ?, built_at = datetime('now'), version = version + 1
+                WHERE brand_id = 'user_brand'
+            """, (req.brand_name, profile_json, snippets_json))
         else:
-            app_profile_state["top_keywords"] = ["precision", "legacy", "craftsmanship"]
+            cur.execute("""
+                INSERT INTO brand_profiles (brand_id, brand_name, profile_json, snippets_json, n_texts, version)
+                VALUES ('user_brand', ?, ?, ?, ?, 1)
+            """, (req.brand_name, profile_json, snippets_json, len(req.snippets)))
 
+        conn.commit()
+
+        # Sync in-memory state for immediate frontend feedback
+        app_profile_state.update(profile_data)
+        app_profile_state["snippetsCount"] = len(req.snippets)
+        app_profile_state["tone_label"] = req.tone
+        app_profile_state["tsne_x"] = float(user_x)
+        app_profile_state["tsne_y"] = float(user_y)
+
+    except Exception as e:
+        logger.error(f"Profile Update Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+    logger.info(f"API -> Profile Updated for {req.brand_name}. Snippets: {len(req.snippets)}")
     return {"status": "success", "message": "Profile updated", "profile": app_profile_state}
 
 
 @app.post("/api/benchmark")
 def run_benchmark(req: BenchmarkRequest):
     """
-    Compare *my_brand* against *competitor* using real feature data when
-    available, falling back to profile-based comparison.
+    Compare *my_brand* against *competitor* using real feature data.
     """
-    my_profile = get_brand_profile(req.my_brand.lower().replace(" ", "_"))
+    # 1. Resolve 'my_brand' ID. If it matches the current user brand name or is 'user_brand', use 'user_brand'.
+    my_bid = req.my_brand.lower().replace(" ", "_")
+    if my_bid == "user_brand" or my_bid == app_profile_state.get("name", "").lower().replace(" ", "_"):
+        my_bid = "user_brand"
+
+    my_profile = get_brand_profile(my_bid)
     comp_profile = get_brand_profile(req.competitor.lower().replace(" ", "_"))
 
     if my_profile is None:
-        raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.my_brand})
+        # Final fallback: use internal app_profile_state if DB fetch fails for user_brand
+        if my_bid == "user_brand":
+            my_profile = app_profile_state
+        else:
+            raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.my_brand})
+
     if comp_profile is None:
         raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.competitor})
 
@@ -573,6 +805,7 @@ def run_benchmark(req: BenchmarkRequest):
         for k in my_scores
     ]
 
+    logger.info(f"API -> Benchmark completed for {req.my_brand} vs {req.competitor}. Radar dimensions: {len(radar_data)}")
     return {
         "my_brand": {
             "name": my_profile.get("brand_name", req.my_brand),
