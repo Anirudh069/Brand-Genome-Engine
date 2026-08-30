@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 
 # Canonical scorer (src/scoring/consistency.py)
 from src.scoring.consistency import compute_consistency_score, generate_edit_plan
+<<<<<<< HEAD
 import numpy as np
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
 # Optional: retrieval index for benchmarking
 try:
@@ -39,7 +42,10 @@ CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 FEATURES_PATH = os.getenv("FEATURES_PATH", "data/processed/features.parquet")
 INDEX_PATH = os.getenv("INDEX_PATH", "embeddings/brand_profile_index.faiss")
 METADATA_PATH = os.getenv("METADATA_PATH", "embeddings/metadata.json")
+<<<<<<< HEAD
 ANALYTICS_CACHE_PATH = os.getenv("ANALYTICS_CACHE_PATH", "data/processed/analytics_cache.json")
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
 # Configure logger
 logging.basicConfig(level=logging.INFO)
@@ -100,11 +106,15 @@ _FALLBACK_BRANDS = [
 
 def get_brand_profile(brand_id: str) -> Optional[dict]:
     """Return the brand profile dict from the DB, or *None* if not found."""
+<<<<<<< HEAD
     profile = None
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor()
+<<<<<<< HEAD
             cur.execute("SELECT profile_json, snippets_json FROM brand_profiles WHERE brand_id = ?", (brand_id,))
             row = cur.fetchone()
             if row:
@@ -121,15 +131,25 @@ def get_brand_profile(brand_id: str) -> Optional[dict]:
                     profile["brand_name"] = profile["name"]
                     
                 return profile
+=======
+            cur.execute("SELECT profile_json FROM brand_profiles WHERE brand_id = ?", (brand_id,))
+            row = cur.fetchone()
+            if row:
+                return json.loads(row["profile_json"])
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
         except sqlite3.Error as e:
             logger.error(f"DB Error fetching profile: {e}")
         finally:
             conn.close()
+<<<<<<< HEAD
     
     logger.info(f"API -> Fetched profile for brand_id: {brand_id}. Success: {profile is not None}")
     if profile:
         logger.info(f"API -> Profile Detail: {profile.get('brand_name', 'No Name')}, Snippets: {profile.get('snippetsCount', 0)}")
     return profile
+=======
+    return None
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
 
 # ── RAG: grounding chunks retrieval ──────────────────────────────────────
@@ -253,7 +273,10 @@ class ProfileUpdate(BaseModel):
     brand_name: str
     mission: str
     tone: str
+<<<<<<< HEAD
     snippets: List[str] = []
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
 class BenchmarkRequest(BaseModel):
     my_brand: str
@@ -263,6 +286,7 @@ class BenchmarkRequest(BaseModel):
 
 # --- ENDPOINTS ---
 
+<<<<<<< HEAD
 @app.on_event("startup")
 def startup_event():
     """Initialise database and run migrations on startup."""
@@ -295,6 +319,8 @@ def startup_event():
             conn.close()
 
 
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 @app.get("/api/health")
 def get_health():
     return {"status": "ok", "version": "2.0.0"}
@@ -308,6 +334,19 @@ def get_brands():
         return {"brands": _FALLBACK_BRANDS}
     try:
         cur = conn.cursor()
+<<<<<<< HEAD
+=======
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS brand_profiles (
+                brand_id TEXT PRIMARY KEY,
+                brand_name TEXT NOT NULL,
+                profile_json TEXT NOT NULL,
+                built_at TEXT NOT NULL DEFAULT (datetime('now')),
+                version INTEGER NOT NULL DEFAULT 1,
+                n_texts INTEGER NOT NULL
+            )
+        ''')
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
         cur.execute("SELECT brand_id, brand_name FROM brand_profiles")
         rows = cur.fetchall()
         brands = [{"brand_id": row["brand_id"], "brand_name": row["brand_name"]} for row in rows]
@@ -344,6 +383,7 @@ def check_consistency(req: ConsistencyCheckRequest):
         )
 
     scores = compute_consistency_score(req.text, brand_profile)
+<<<<<<< HEAD
     
     # ── Generate Diagnostics ──────────────────────────────
     diagnostics = []
@@ -373,12 +413,18 @@ def check_consistency(req: ConsistencyCheckRequest):
             logger.error(f"Failed to log analysis: {e}")
         finally:
             conn.close()
+=======
+    _record_analysis(scores["overall_score"])
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
     return {
         "brand_id": req.brand_id,
         "brand_name": brand_profile.get("brand_name", req.brand_id.replace("_", " ").title()),
         **scores,
+<<<<<<< HEAD
         "diagnostics": diagnostics,
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
         "error": None,
     }
 
@@ -483,6 +529,7 @@ def rewrite(req: RewriteRequest):
         if goal not in suggestions_list:
             suggestions_list.append(goal)
 
+<<<<<<< HEAD
     # ── Log to DB ─────────────────────────────────────────
     conn = get_db_connection()
     if conn:
@@ -503,6 +550,9 @@ def rewrite(req: RewriteRequest):
             logger.error(f"Failed to log rewrite: {e}")
         finally:
             conn.close()
+=======
+    _record_analysis(score_before["overall_score"], score_after["overall_score"])
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
     return {
         "brand_id": req.brand_id,
@@ -555,6 +605,7 @@ def rebuild_chunks():
 
 @app.get("/api/analytics")
 def get_analytics():
+<<<<<<< HEAD
     """Return aggregated analytics from database + cached heavy data."""
     # 1. Fetch live counters from DB
     conn = get_db_connection()
@@ -600,12 +651,21 @@ def get_analytics():
         "tsne_points": cache_data.get("tsne_points", []),
         "heatmap": cache_data.get("heatmap", {"pillars": [], "brands": []}),
         "tone_histogram": cache_data.get("tone_histogram", {"counts": [], "bins": []})
+=======
+    """Return aggregated analytics from in-process history."""
+    return {
+        "total_analyzed": max(_analytics_state["total_analyzed"], 142),
+        "avg_consistency": _analytics_state["avg_consistency"] or 84,
+        "deviations_fixed": max(_analytics_state["deviations_fixed"], 38),
+        "trend": _analytics_state["trend"],
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     }
 
 
 # ── Profile (in-memory state for frontend) ───────────────────────────────
 
 app_profile_state: dict[str, Any] = {
+<<<<<<< HEAD
     "brand_id": "user_brand",
     "brand_name": "Your Brand",
     "name": "Your Brand",
@@ -616,11 +676,19 @@ app_profile_state: dict[str, Any] = {
     "avg_sentiment": 0.85,
     "snippetsCount": 0,
     "snippets": ["", "", "", "", "", "", ""],
+=======
+    "name": "Your Brand",
+    "mission": "Delivering excellence",
+    "tone": "Sophisticated",
+    "top_keywords": ["precision", "legacy", "craftsmanship"],
+    "avg_sentiment": 0.85,
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 }
 
 
 @app.get("/api/profile")
 def get_app_profile():
+<<<<<<< HEAD
     global app_profile_state
     db_profile = get_brand_profile("user_brand")
     if db_profile:
@@ -632,6 +700,8 @@ def get_app_profile():
         if "snippetsCount" not in app_profile_state and "snippets" in app_profile_state:
             app_profile_state["snippetsCount"] = len(app_profile_state["snippets"])
             
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     return app_profile_state
 
 
@@ -641,6 +711,7 @@ def update_app_profile(req: ProfileUpdate):
     app_profile_state["name"] = req.brand_name
     app_profile_state["mission"] = req.mission
     app_profile_state["tone"] = req.tone
+<<<<<<< HEAD
     app_profile_state["snippets"] = req.snippets
 
     # 1. Store in DB
@@ -751,12 +822,47 @@ def update_app_profile(req: ProfileUpdate):
         conn.close()
 
     logger.info(f"API -> Profile Updated for {req.brand_name}. Snippets: {len(req.snippets)}")
+=======
+
+    # Extract keywords from mission text using real vocabulary analysis
+    from src.feature_extraction.feature_utils import word_tokenize, clean_text
+    from src.feature_extraction.sentiment_extractor import extract_sentiment
+
+    cleaned = clean_text(req.mission)
+    if cleaned:
+        tokens = word_tokenize(cleaned)
+        # Pick top unique words > 4 chars as keywords
+        seen: set[str] = set()
+        kw: list[str] = []
+        for t in tokens:
+            low = t.lower()
+            if len(low) > 4 and low not in seen:
+                seen.add(low)
+                kw.append(low)
+            if len(kw) >= 5:
+                break
+        if kw:
+            app_profile_state["top_keywords"] = kw
+
+    app_profile_state["avg_sentiment"] = extract_sentiment(cleaned or req.mission)
+
+    # Tone-based keyword fallback
+    if not cleaned or len(app_profile_state.get("top_keywords", [])) < 3:
+        if req.tone == "Technical":
+            app_profile_state["top_keywords"] = ["engineering", "calibration", "mechanics"]
+        elif req.tone == "Adventurous":
+            app_profile_state["top_keywords"] = ["exploration", "durability", "frontier"]
+        else:
+            app_profile_state["top_keywords"] = ["precision", "legacy", "craftsmanship"]
+
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     return {"status": "success", "message": "Profile updated", "profile": app_profile_state}
 
 
 @app.post("/api/benchmark")
 def run_benchmark(req: BenchmarkRequest):
     """
+<<<<<<< HEAD
     Compare *my_brand* against *competitor* using real feature data.
     """
     # 1. Resolve 'my_brand' ID. If it matches the current user brand name or is 'user_brand', use 'user_brand'.
@@ -774,6 +880,16 @@ def run_benchmark(req: BenchmarkRequest):
         else:
             raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.my_brand})
             
+=======
+    Compare *my_brand* against *competitor* using real feature data when
+    available, falling back to profile-based comparison.
+    """
+    my_profile = get_brand_profile(req.my_brand.lower().replace(" ", "_"))
+    comp_profile = get_brand_profile(req.competitor.lower().replace(" ", "_"))
+
+    if my_profile is None:
+        raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.my_brand})
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     if comp_profile is None:
         raise HTTPException(status_code=404, detail={"error": "profile_missing", "brand_id": req.competitor})
 
@@ -805,7 +921,10 @@ def run_benchmark(req: BenchmarkRequest):
         for k in my_scores
     ]
 
+<<<<<<< HEAD
     logger.info(f"API -> Benchmark completed for {req.my_brand} vs {req.competitor}. Radar dimensions: {len(radar_data)}")
+=======
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
     return {
         "my_brand": {
             "name": my_profile.get("brand_name", req.my_brand),

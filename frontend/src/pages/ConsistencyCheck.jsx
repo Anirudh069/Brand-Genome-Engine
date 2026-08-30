@@ -1,5 +1,9 @@
 import { useState } from 'react';
+<<<<<<< HEAD
 import { CheckCircle, Loader2, Sparkles, AlertCircle, Info, BookOpen, Fingerprint } from 'lucide-react';
+=======
+import { CheckCircle, Loader2, Sparkles } from 'lucide-react';
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 import { Card } from "../components/ui/Card";
 import { TextArea } from "../components/ui/TextArea";
 import { Button } from "../components/ui/Button";
@@ -10,7 +14,11 @@ import { RewritePanel } from "../components/ui/RewritePanel";
 import { GroundingExamples } from "../components/ui/GroundingExamples";
 import { API_BASE } from "../lib/constants";
 
+<<<<<<< HEAD
 const ENABLE_REWRITE_UI = true;
+=======
+const ENABLE_REWRITE_UI = false; // flip to true later
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
 
 // Helper component for rendering Before/After scores with animated progress bars
 const DualMetricBar = ({ label, beforeVal, afterVal, baseColor }) => {
@@ -54,6 +62,7 @@ export const ConsistencyCheck = () => {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
 
+<<<<<<< HEAD
     const handleAction = async () => {
         if (!selectedBrand || !copyText) return;
         setLoading(true);
@@ -126,17 +135,84 @@ export const ConsistencyCheck = () => {
                         <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">
                             {ENABLE_REWRITE_UI ? "Rewrite Engine" : "Analysis Engine"}
                         </h2>
+=======
+    const handleRewrite = async () => {
+  if (!selectedBrand || !copyText) return;
+  setLoading(true);
+  setResult(null);
+
+  try {
+    const res = await fetch(`${API_BASE}/check-consistency`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        brand_id: selectedBrand.brand_id,
+        text: copyText,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data?.error) {
+      // FastAPI HTTPException wraps errors in { detail: { error: "..." } }
+      const rawErr =
+        data?.error ||
+        data?.detail?.error ||
+        (typeof data?.detail === "string" ? data.detail : null) ||
+        "unknown";
+      const friendlyErrors = {
+        profile_missing: "No brand profile found for this brand. Please select a valid brand.",
+        text_too_short: "Text is too short to analyze. Please enter at least 10 words.",
+      };
+      setResult({ error: friendlyErrors[rawErr] || rawErr });
+      setLoading(false);
+      return;
+    }
+
+    // Shape into the old rewrite response so the existing UI doesn't crash
+    setResult({
+      score_before: data,
+      score_after: data, // same for now (no rewrite in demo)
+      rewritten_text: "",
+      suggestions: [],
+      grounding_chunks_used: [],
+      error: null,
+    });
+  } catch (err) {
+    console.error(err);
+    setResult({ error: "Network error connecting to the engine." });
+  }
+
+  setLoading(false);
+};
+
+   return (
+       <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both max-w-6xl mx-auto">
+
+           <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
+               <div className="flex items-center gap-5">
+                   <div className="p-3.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-[0_0_30px_rgba(99,102,241,0.3)] text-white border border-indigo-400/30">
+                       <Sparkles size={28} />
+                   </div>
+                    <div>
+                        <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Analysis Engine</h2> {/*Later change to Rewrite Engine*/}
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                         <p className="text-gray-400 mt-2 text-lg">Align and elevate copy perfectly to the brand genome.</p>
                     </div>
                 </div>
                 <div className="flex flex-col items-start md:items-end gap-2">
+<<<<<<< HEAD
                     <span className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Active Brand Target</span>
+=======
+                    <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Target Brand</span>
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                     <BrandSelector selectedId={selectedBrand?.brand_id} onSelect={setSelectedBrand} />
                 </div>
             </div>
 
             <ErrorBanner error={result?.error} />
 
+<<<<<<< HEAD
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 {/* Left Column: Input and Engine Controls */}
                 <div className="lg:col-span-7 flex flex-col gap-6">
@@ -177,17 +253,43 @@ export const ConsistencyCheck = () => {
                                 </h4>
                                 <GroundingExamples chunks={result.grounding_chunks_used} />
                             </div>
+=======
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+                {/* Left Column: Input and Suggestions/Rewrite */}
+                <div className="flex flex-col gap-6">
+                    <Card delay={100} className="flex flex-col">
+                        <h3 className="text-xl font-bold text-white mb-6 tracking-wide">Source Material</h3>
+                        <TextArea
+                            label="Paste Off-Brand Copy"
+                            rows={6}
+                            value={copyText}
+                            onChange={(e) => setCopyText(e.target.value)}
+                            className="font-mono text-sm leading-relaxed mb-6"
+                        />
+                        <Button primary className="w-full text-lg gap-3 py-4" onClick={handleRewrite} disabled={loading || !selectedBrand || copyText.length < 5}>
+                            {loading ? <Loader2 className="animate-spin" /> : <><Sparkles size={20} /> Analyze Consistency </>} {/* Later change to Ground & Rewrite */}
+                        </Button>
+
+                        {/* RAG Examples Accordion */}
+                        {ENABLE_REWRITE_UI && result && !result.error && (
+                            <GroundingExamples chunks={result.grounding_chunks_used} />
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                         )}
                     </Card>
 
                     {ENABLE_REWRITE_UI && result && !result.error && (
+<<<<<<< HEAD
                         <div className="space-y-6 animate-in slide-in-from-top-4 duration-700">
+=======
+                        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                             <SuggestionsPanel suggestions={result.suggestions} />
                             <RewritePanel text={result.rewritten_text} />
                         </div>
                     )}
                 </div>
 
+<<<<<<< HEAD
                 {/* Right Column: Analytics & Scoring */}
                 <div className="lg:col-span-5 flex flex-col gap-6">
                     {!result || result.error ? (
@@ -230,10 +332,38 @@ export const ConsistencyCheck = () => {
                                     </p>
                                     <div className="text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
                                         {result.score_after?.overall_score ?? 0}<span className="text-lg text-indigo-400 font-bold ml-1">/100</span>
+=======
+                {/* Right Column: Scoring */}
+                <div>
+                    {!result || result.error ? (
+                        <Card delay={200} className="flex flex-col items-center justify-center p-16 text-center border-dashed border-white/10 bg-transparent h-full min-h-[400px]">
+                            <div className="p-6 rounded-full bg-white/5 mb-6">
+                                <CheckCircle size={48} className="text-indigo-500/50" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-300">Awaiting Submissions</h3>
+                            <p className="text-gray-500 mt-4 max-w-sm text-lg leading-relaxed">Enter copy on the left to perform a deep semantic analysis and automatically rewrite it to standard.</p>
+                        </Card>
+                    ) : (
+                        <Card delay={300} className="h-full">
+                            <h3 className="text-xl font-bold text-white mb-8 tracking-wide">Alignment Shift</h3>
+
+                            <div className="grid grid-cols-2 gap-4 mb-10 pb-8 border-b border-white/10">
+                                <div>
+                                    <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Before Score</p>
+                                    <div className="text-4xl font-black text-gray-300">
+                                        {result.score_before?.overall_score ?? 0}<span className="text-xl text-gray-600">/100</span>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Analysis Score</p> {/*Later change to After Rewrite*/}
+                                    <div className="text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
+                                        {result.score_after?.overall_score ?? 0}<span className="text-xl text-indigo-400">/100</span>
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                                     </div>
                                 </div>
                             </div>
 
+<<<<<<< HEAD
                             {/* Diagnostics Breakdown */}
                             <div className="mb-10">
                                 <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -250,6 +380,9 @@ export const ConsistencyCheck = () => {
                             </div>
 
                             <div className="space-y-8 flex-1">
+=======
+                            <div className="space-y-8">
+>>>>>>> 5c33a850df3e0cde7b2d472ca31c397ba19febcb
                                 <DualMetricBar
                                     label="Tone Resonance"
                                     beforeVal={result.score_before?.tone_pct ?? 0}
