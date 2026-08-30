@@ -1,0 +1,27 @@
+{
+  "0": {
+    "brand_id": "omega",
+    "brand_name": "Omega",
+    "n_texts": 14
+  },
+  "1": {
+    "brand_id": "patekphillipe",
+    "brand_name": "Patek Phillipe",
+    "n_texts": 15
+  },
+  "2": {
+    "brand_id": "rolex",
+    "brand_name": "Rolex",
+    "n_texts": 16
+  },
+  "3": {
+    "brand_id": "tagheuer",
+    "brand_name": "TAG Heuer",
+    "n_texts": 15
+  },
+  "4": {
+    "brand_id": "tissot",
+    "brand_name": "Tissot",
+    "n_texts": 15
+  }
+}
