@@ -11,7 +11,15 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # Canonical scorer (src/scoring/consistency.py)
-from src.scoring.consistency import compute_consistency_score, generate_edit_plan
+from src.scoring.consistency import (
+    compute_consistency_score,
+    generate_edit_plan,
+    generate_drift_report_dict,
+    build_diagnostics_dict,
+)
+from src.scoring import analysis_log
+from src.profiles.brand_profile_builder import build_user_genome
+from src.scoring.consistency_scorer import WEIGHT_PRESETS
 import numpy as np
 
 # Optional: retrieval index for benchmarking
@@ -240,6 +248,8 @@ def _load_features_for_benchmarking():
 class ConsistencyCheckRequest(BaseModel):
     text: str
     brand_id: str
+    # Overrides the genome's stored weight preset for this call only.
+    weight_preset: Optional[str] = None
 
 class RewriteRequest(BaseModel):
     text: str
@@ -254,6 +264,10 @@ class ProfileUpdate(BaseModel):
     mission: str
     tone: str
     snippets: List[str] = []
+    # Optional scoring emphasis: "balanced" | "tone_heavy" | "semantic_heavy".
+    # Stored on the genome, so later scoring calls pick it up without the
+    # frontend having to resend it. Defaults to balanced when omitted.
+    weight_preset: Optional[str] = None
 
 class BenchmarkRequest(BaseModel):
     my_brand: str
@@ -293,6 +307,19 @@ def startup_event():
             logger.error(f"Failed to initialise database: {e}")
         finally:
             conn.close()
+
+    # Person C: bring analysis_history up to the logging contract. The earlier
+    # table had columns (brand_id, analysis_type, result_json, created_at) while
+    # the endpoints inserted score_before_json / score_after_json / improved, so
+    # every write failed and the table stayed empty — which is why the Analytics
+    # counters were falling back to hardcoded placeholder numbers. This adds the
+    # missing columns in place, preserving any existing rows.
+    try:
+        analysis_log.init_history_table(SQLITE_DB_PATH)
+        logger.info("analysis_history table ready (Person C logging contract v%s).",
+                    analysis_log.LOG_SCHEMA_VERSION)
+    except sqlite3.Error as e:
+        logger.error(f"Failed to initialise analysis_history: {e}")
 
 
 @app.get("/api/health")
@@ -343,36 +370,67 @@ def check_consistency(req: ConsistencyCheckRequest):
                     "brand_id": req.brand_id},
         )
 
-    scores = compute_consistency_score(req.text, brand_profile)
+    scores = compute_consistency_score(req.text, brand_profile,
+                                       preset=req.weight_preset)
 
     # ── Generate Diagnostics ──────────────────────────────
+    # Still a list of strings, so the frontend contract is unchanged — but the
+    # strings now name the actual words involved instead of describing the
+    # metric that fell below a threshold. "Vocabulary gap: 'waterproof',
+    # 'sealed' are missing" is something a writer can act on; "Key brand
+    # anchorage terms are missing" is not.
+    detail = build_diagnostics_dict(req.text, brand_profile, db_path=SQLITE_DB_PATH)
+    drift = generate_drift_report_dict(req.text, brand_profile, db_path=SQLITE_DB_PATH)
+
     diagnostics = []
-    if scores["tone_pct"] < 80:
-        diagnostics.append("Tone mismatch: The text formality level deviates from the brand's established base.")
-    if scores["vocab_overlap_pct"] < 50:
-        diagnostics.append("Vocabulary gap: Key brand anchorage terms are missing from the content.")
-    if scores["sentiment_alignment_pct"] < 70:
-        diagnostics.append("Sentiment variance: The emotional resonance of this text is inconsistent with the brand persona.")
-    if scores["readability_match_pct"] < 60:
-        diagnostics.append("Readability shift: The sentence complexity exceeds or falls short of the brand's target ease score.")
+
+    if drift.get("summary"):
+        diagnostics.append(drift["summary"])
+
+    if detail.get("off_brand_terms"):
+        diagnostics.append(
+            "Off-brand vocabulary: "
+            + ", ".join(f"'{w}'" for w in detail["off_brand_terms"][:5]) + ".")
+
+    if scores["vocab_overlap_pct"] < 50 and detail.get("missing_terms"):
+        diagnostics.append(
+            "Missing brand vocabulary: "
+            + ", ".join(f"'{w}'" for w in detail["missing_terms"][:5]) + ".")
+
+    if detail.get("aligned_terms"):
+        diagnostics.append(
+            "Aligned brand terms already present: "
+            + ", ".join(f"'{w}'" for w in detail["aligned_terms"][:5]) + ".")
+
+    if detail.get("missing_pillar_terms"):
+        diagnostics.append(
+            "Messaging pillars not covered: "
+            + ", ".join(detail["missing_pillar_terms"]) + ".")
+
+    if detail.get("name_mentions"):
+        diagnostics.append(
+            f"Brand name mentioned {detail['name_mentions']} time(s) — tracked as a "
+            f"neutral signal, carrying no scoring weight.")
 
     if not diagnostics:
-        diagnostics.append("High alignment: Text maintains strong consistency across all primary genome dimensions.")
+        diagnostics.append(
+            "High alignment: text is consistent with the brand voice on every "
+            "measured dimension.")
 
-    # ── Log to DB ─────────────────────────────────────────
-    conn = get_db_connection()
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO analysis_history (brand_id, score_before_json, text_length)
-                VALUES (?, ?, ?)
-            """, (req.brand_id, json.dumps(scores), len(req.text)))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Failed to log analysis: {e}")
-        finally:
-            conn.close()
+    # ── Log to DB (Person C logging contract) ─────────────
+    # One row per run, with the full payload in diagnostics_json and the flat
+    # scores kept indexable for the counters. A logging failure is swallowed
+    # inside log_analysis — the user must never lose a result because an
+    # analytics insert failed.
+    analysis_log.log_analysis(
+        req.brand_id,
+        analysis_log.EVENT_CONSISTENCY,
+        input_text=req.text,
+        score_before=analysis_log.score_from_dict(scores),
+        diagnostics=diagnostics,
+        extra={"text_length": len(req.text)},
+        db_path=SQLITE_DB_PATH,
+    )
 
     return {
         "brand_id": req.brand_id,
@@ -483,26 +541,16 @@ def rewrite(req: RewriteRequest):
         if goal not in suggestions_list:
             suggestions_list.append(goal)
 
-    # ── Log to DB ─────────────────────────────────────────
-    conn = get_db_connection()
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO analysis_history (brand_id, score_before_json, score_after_json, text_length, improved)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                req.brand_id,
-                json.dumps(score_before),
-                json.dumps(score_after),
-                len(req.text),
-                score_after["overall_score"] > score_before["overall_score"]
-            ))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Failed to log rewrite: {e}")
-        finally:
-            conn.close()
+    # ── Log to DB (Person C logging contract) ─────────────
+    analysis_log.log_analysis(
+        req.brand_id,
+        analysis_log.EVENT_REWRITE,
+        input_text=req.text,
+        score_before=analysis_log.score_from_dict(score_before),
+        score_after=analysis_log.score_from_dict(score_after),
+        extra={"text_length": len(req.text)},
+        db_path=SQLITE_DB_PATH,
+    )
 
     return {
         "brand_id": req.brand_id,
@@ -513,6 +561,11 @@ def rewrite(req: RewriteRequest):
         "grounding_chunks_used": chunks,
         "score_before": score_before,
         "score_after": score_after,
+        # New in Phase 4B — the structured "why is this off-brand" explanation.
+        # Additive: existing consumers that ignore this key are unaffected.
+        "drift_report": generate_drift_report_dict(req.text, brand_profile,
+                                                   db_path=SQLITE_DB_PATH),
+        "edit_plan": edit_plan,
         "error": None,
     }
 
@@ -556,32 +609,18 @@ def rebuild_chunks():
 @app.get("/api/analytics")
 def get_analytics():
     """Return aggregated analytics from database + cached heavy data."""
-    # 1. Fetch live counters from DB
-    conn = get_db_connection()
-    total_analyzed = 142
-    avg_consistency = 84.0
-    deviations_fixed = 38
-
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM analysis_history")
-            db_count = cur.fetchone()[0]
-            total_analyzed = max(total_analyzed, db_count)
-
-            cur.execute("SELECT score_before_json FROM analysis_history")
-            rows = cur.fetchall()
-            if rows:
-                scores = [json.loads(r["score_before_json"])["overall_score"] for r in rows]
-                avg_consistency = round(sum(scores) / len(scores), 1)
-
-            cur.execute("SELECT COUNT(*) FROM analysis_history WHERE improved = 1")
-            deviations_fixed = max(deviations_fixed, cur.fetchone()[0])
-
-        except sqlite3.Error as e:
-            logger.error(f"Analytics DB Error: {e}")
-        finally:
-            conn.close()
+    # 1. Live counters, read from analysis_history.
+    #
+    # These were previously seeded with hardcoded values (142 / 84.0 / 38) and
+    # then max()-ed against the database, so the page displayed invented numbers
+    # that would not move until real usage passed 142 runs. Combined with the
+    # failing inserts, the counters were never real. They now come entirely from
+    # the table, and read 0 on a fresh database — which is the honest answer.
+    counters = analysis_log.get_counters(SQLITE_DB_PATH)
+    total_analyzed = counters["copies_analysed"]
+    avg_consistency = counters["avg_consistency"]
+    deviations_fixed = counters["deviations_fixed"]
+    trend = analysis_log.get_trend(SQLITE_DB_PATH)
 
     # 2. Fetch cached heavy analytics (t-SNE, Heatmap)
     cache_data = {}
@@ -596,7 +635,7 @@ def get_analytics():
         "total_analyzed": total_analyzed,
         "avg_consistency": avg_consistency,
         "deviations_fixed": deviations_fixed,
-        "trend": _analytics_state["trend"],
+        "trend": trend,
         "tsne_points": cache_data.get("tsne_points", []),
         "heatmap": cache_data.get("heatmap", {"pillars": [], "brands": []}),
         "tone_histogram": cache_data.get("tone_histogram", {"counts": [], "bins": []})
@@ -659,21 +698,30 @@ def update_app_profile(req: ProfileUpdate):
         from src.feature_extraction.sentiment_extractor import extract_sentiment
         from src.feature_extraction.embedding_extractor import get_embedding
 
-        cleaned_mission = clean_text(req.mission)
-        sentiment = extract_sentiment(cleaned_mission)
-
-        profile_data = {
-            "brand_id": "user_brand",
-            "brand_name": req.brand_name,
-            "name": req.brand_name,  # Compatibility
-            "mission": req.mission,
-            "tone_label": req.tone,
-            "avg_sentiment": sentiment,
-            "avg_formality": 0.7 if req.tone == "Formal" else 0.4,
-            "top_keywords": ["precision", "legacy", "craftsmanship"], # Simplified
-            "snippets": req.snippets,
-            "snippetsCount": len(req.snippets)
-        }
+        # Person C — the user's genome is now MEASURED from their mission and
+        # snippets rather than assembled from constants. The previous version
+        # stored top_keywords = ["precision", "legacy", "craftsmanship"] and a
+        # formality of 0.7 or 0.4 depending on a dropdown, which meant the
+        # Consistency Check page — where the user's own copy is scored against
+        # their own genome — was comparing against a placeholder. Keywords,
+        # formality, sentiment, readability, lexical variety and sentence length
+        # all come from the submitted text now, and the standard deviations
+        # carry generous floors because eight short texts is a small sample.
+        try:
+            profile_data = build_user_genome(
+                brand_name=req.brand_name,
+                mission=req.mission,
+                snippets=req.snippets,
+                tone_label=req.tone,
+                db_path=SQLITE_DB_PATH,
+                weight_preset=getattr(req, "weight_preset", None),
+                persist=False,          # written by the upsert below
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "insufficient_text", "message": str(e)},
+            )
 
         # 2. Compute user embedding centroid for t-SNE projection
         user_embedding = None
