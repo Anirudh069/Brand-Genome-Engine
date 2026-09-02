@@ -155,15 +155,15 @@ export const ConsistencyCheck = () => {
                             onChange={(e) => setCopyText(e.target.value)}
                             className="font-mono text-sm leading-relaxed mb-6 bg-[#09090B]/50"
                         />
-                        <Button
-                            primary
-                            className="w-full text-lg gap-3 py-5 group"
-                            onClick={handleAction}
+                        <Button 
+                            primary 
+                            className="w-full text-lg gap-3 py-5 group" 
+                            onClick={handleAction} 
                             disabled={loading || !selectedBrand || copyText.length < 5}
                         >
                             {loading ? <Loader2 className="animate-spin" /> : (
                                 <>
-                                    <Sparkles size={20} className="group-hover:scale-125 transition-transform" />
+                                    <Sparkles size={20} className="group-hover:scale-125 transition-transform" /> 
                                     {ENABLE_REWRITE_UI ? "Ground & Rewrite" : "Analyze Consistency"}
                                 </>
                             )}
@@ -197,7 +197,7 @@ export const ConsistencyCheck = () => {
                             </div>
                             <h3 className="text-2xl font-bold text-gray-200">Awaiting Submissions</h3>
                             <p className="text-gray-500 mt-4 max-w-sm text-lg leading-relaxed">
-                                {selectedBrand
+                                {selectedBrand 
                                     ? `Engine ready for ${selectedBrand.brand_name}. Paste copy to run deep semantic mapping.`
                                     : "Select a brand target above to activate the engine."
                                 }

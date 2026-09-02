@@ -9,9 +9,9 @@ import { DNAAnimation } from "../components/ui/DNAAnimation";
 import { API_BASE } from "../lib/constants";
 
 export const BrandSetup = ({ profile, fetchProfile }) => {
-    const defaultForm = {
-        brand_name: '',
-        mission: '',
+    const defaultForm = { 
+        brand_name: '', 
+        mission: '', 
         tone: 'Sophisticated',
         snippets: ['', '', '', '', '', '', '']
     };
@@ -26,9 +26,9 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
     useEffect(() => {
         if (profile && profile.brand_id === 'user_brand') {
              console.log("Populating form from server profile:", profile);
-             setForm({
-                brand_name: profile.brand_name || profile.name || '',
-                mission: profile.mission || '',
+             setForm({ 
+                brand_name: profile.brand_name || profile.name || '', 
+                mission: profile.mission || '', 
                 tone: profile.tone_label || 'Sophisticated',
                 snippets: profile.snippets || ['', '', '', '', '', '', '']
             });
@@ -73,7 +73,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
 
         setInitializing(true);
         setLoading(true);
-
+        
         // Progress simulation for "Initialising..." overlay
         const interval = setInterval(() => {
             setProgress(prev => {
@@ -88,7 +88,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(form)
             });
-
+            
             if (res.ok) {
                 // Keep the overlay for a bit longer to look premium
                 setProgress(100);
@@ -120,7 +120,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
 
     return (
         <div className="relative animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both">
-
+            
             {/* Initialization Overlay */}
             {initializing && (
                 <div className="fixed inset-0 z-[100] bg-[#09090B]/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
@@ -133,9 +133,9 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                         <p className="text-gray-400 mb-8 max-w-sm mx-auto">
                             Extracting linguistic patterns and calibrating vector proximity across 384 dimensions.
                         </p>
-
+                        
                         <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden mb-4 border border-white/10">
-                            <div
+                            <div 
                                 className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500 ease-out shadow-[0_0_15px_rgba(99,102,241,0.5)]"
                                 style={{ width: `${progress}%` }}
                             />
@@ -185,8 +185,8 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                                     key={t}
                                     onClick={() => setForm({ ...form, tone: t })}
                                     className={`px-4 py-3 rounded-xl border text-xs font-bold transition-all ${
-                                        form.tone === t
-                                        ? 'bg-indigo-500 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)]'
+                                        form.tone === t 
+                                        ? 'bg-indigo-500 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)]' 
                                         : 'bg-[#09090B] border-white/10 text-gray-500 hover:border-white/20'
                                     }`}
                                 >
@@ -204,7 +204,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                         <p className="text-xs text-gray-500 mb-6 leading-relaxed">
                             Provide 7 authentic snippets of brand copy (captions, website blurbs, ads) to map the DNA.
                         </p>
-
+                        
                         <div className="space-y-4">
                             {form.snippets.map((s, i) => (
                                 <div key={i} className="relative group">
@@ -286,20 +286,20 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                             <h3 className="text-sm font-bold text-white uppercase tracking-widest">System Controls</h3>
                         </div>
                         <p className="text-xs text-gray-500 mb-6">Manually trigger vector index rebuild and align system cache.</p>
-
-                        <Button
+                        
+                        <Button 
                             className={`w-full py-3 text-sm font-bold transition-all ${rebuilding ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' : 'bg-[#111116] border border-white/10 text-gray-300 hover:border-white/30'}`}
-                            onClick={handleRebuild}
+                            onClick={handleRebuild} 
                             disabled={rebuilding}
                         >
                             {rebuilding ? <Loader2 className="animate-spin inline mr-2" size={16} /> : null}
                             {rebuilding ? "Rebuilding Index..." : "Force Index Rebuild"}
                         </Button>
-
+                        
                         {rebuildStatus && (
                             <div className={`mt-4 text-xs font-bold px-4 py-3 rounded-xl border ${
-                                rebuildStatus.includes('Error') || rebuildStatus.includes('Failed')
-                                    ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                                rebuildStatus.includes('Error') || rebuildStatus.includes('Failed') 
+                                    ? 'bg-red-500/10 border-red-500/20 text-red-400' 
                                     : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                             }`}>
                                 {rebuildStatus}

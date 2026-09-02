@@ -48,7 +48,7 @@ export const Analytics = ({ profile }) => {
         name: p.brand_name
     })) : [];
 
-    const userPoint = tsnePoints.find(p => p.brand_id === 'user_brand') ||
+    const userPoint = tsnePoints.find(p => p.brand_id === 'user_brand') || 
                       (profile?.tsne_x !== undefined ? { x: profile.tsne_x, y: profile.tsne_y, z: 400, name: profile.name || "Your Brand", brand_id: 'user_brand' } : null);
     const competitorPoints = tsnePoints.filter(p => p.brand_id !== 'user_brand');
 
@@ -174,10 +174,10 @@ export const Analytics = ({ profile }) => {
                                 }} />
                                 <Scatter name="Competitors" data={competitorPoints} fill="#1F2937" stroke="rgba(255,255,255,0.1)" />
                                 {userPoint && (
-                                    <Scatter
-                                        name="Your Brand"
-                                        data={[userPoint]}
-                                        fill="#6366F1"
+                                    <Scatter 
+                                        name="Your Brand" 
+                                        data={[userPoint]} 
+                                        fill="#6366F1" 
                                         shape={(props) => (
                                             <g>
                                                 <circle cx={props.cx} cy={props.cy} r={12} fill="#6366F1" className="animate-pulse" filter="blur(4px)" opacity="0.5" />

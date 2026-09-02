@@ -37,10 +37,10 @@ export const Benchmarking = ({ profile }) => {
         setLoading(true);
         try {
             console.log(`Starting simulation for ${profile?.brand_id || "user_brand"} vs ${competitor}`);
-            const payload = {
-                my_brand: profile?.brand_id || "user_brand",
-                competitor,
-                metric
+            const payload = { 
+                my_brand: profile?.brand_id || "user_brand", 
+                competitor, 
+                metric 
             };
             console.log("Benchmark payload:", payload);
             const res = await fetch(`${API_BASE}/benchmark`, {
@@ -126,10 +126,10 @@ export const Benchmarking = ({ profile }) => {
                         </div>
                     </div>
 
-                    <Button
-                        primary
-                        className="w-full bg-gradient-to-r from-orange-500 to-rose-600 hover:from-orange-400 hover:to-rose-500 shadow-[0_0_20px_rgba(249,115,22,0.3)] text-lg mt-10 py-5 group"
-                        onClick={handleBenchmark}
+                    <Button 
+                        primary 
+                        className="w-full bg-gradient-to-r from-orange-500 to-rose-600 hover:from-orange-400 hover:to-rose-500 shadow-[0_0_20px_rgba(249,115,22,0.3)] text-lg mt-10 py-5 group" 
+                        onClick={handleBenchmark} 
                         disabled={loading || !competitor}
                     >
                         {loading ? <Loader2 className="animate-spin" /> : <>Run Simulation <ArrowRight size={18} className="ml-2 transition-transform group-hover:translate-x-1" /></>}
