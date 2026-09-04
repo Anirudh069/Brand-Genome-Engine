@@ -170,6 +170,25 @@ def _current_fingerprint(db_path: str) -> str | None:
     return _fingerprint(brand_texts, brand_chunks)
 
 
+def get_cache_state(db_path: str, cache_path: str) -> dict[str, Any]:
+    current_fp = _current_fingerprint(db_path)
+    if current_fp is None:
+        return {"state": "missing", "current_fingerprint": None, "cached_fingerprint": None}
+    if not Path(cache_path).exists():
+        return {"state": "missing", "current_fingerprint": current_fp, "cached_fingerprint": None}
+    try:
+        with open(cache_path) as f:
+            cached = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"state": "stale", "current_fingerprint": current_fp, "cached_fingerprint": None}
+    cached_fp = cached.get("fingerprint")
+    return {
+        "state": "valid" if cached_fp == current_fp else "stale",
+        "current_fingerprint": current_fp,
+        "cached_fingerprint": cached_fp,
+    }
+
+
 def load_or_build(db_path: str, cache_path: str) -> dict[str, Any]:
     """Load the cached artifact if present and fingerprint-valid; else rebuild."""
     if Path(cache_path).exists():

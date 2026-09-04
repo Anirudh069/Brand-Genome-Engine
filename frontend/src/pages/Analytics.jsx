@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { LineChart as LineChartIcon, Activity, Flame, Share2, BarChart3, Fingerprint } from 'lucide-react';
 import { Card } from "../components/ui/Card";
 import { Metric } from "../components/ui/Metric";
-import { API_BASE } from "../lib/constants";
+import { fetchAnalytics } from "../lib/analyticsApi";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart, ScatterChart, Scatter, ZAxis, BarChart, Bar } from 'recharts';
 
 // Fixed deterministic palette for the (at most ~10) competitor brands in the t-SNE plot.
@@ -21,10 +21,9 @@ export const Analytics = ({ profile }) => {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        fetch(`${API_BASE}/analytics`)
-            .then(res => res.json())
+        fetchAnalytics()
             .then(d => setData(d))
-            .catch(err => setError(String(err)));
+            .catch(err => setError(err.message || String(err)));
     }, []);
 
     const pillarNames = data?.pillars?.names || [];

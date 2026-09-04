@@ -8,16 +8,26 @@ from typing import Any
 import numpy as np
 
 from src.feature_extraction.embedding_extractor import get_embedding
+from src.feature_extraction.feature_utils import clean_text
 from src.feature_extraction.formality_extractor import extract_formality
 from src.feature_extraction.readability_extractor import extract_readability
 from src.feature_extraction.sentiment_extractor import extract_sentiment
 from src.feature_extraction.topic_extractor import extract_topics
 from src.feature_extraction.vocabulary_extractor import extract_vocab_metrics
+from scripts.build_brand_chunks import pack_text_into_chunks
 
 USER_BRAND_DB_ID = 0
 USER_BRAND_ALIAS = "user_brand"
 EMBEDDING_DIM = 384
 SNIPPET_COUNT = 7
+
+# The Stage 5 RAG identifier for user-authored text/chunk rows is the SAME
+# alias used everywhere else for the user brand — brand_texts/brand_texts_raw/
+# brand_chunks all use TEXT brand_id, so USER_BRAND_ALIAS ("user_brand") is
+# reused rather than inventing a second identifier. brands.id / brand_profile
+# .brand_id = USER_BRAND_DB_ID (0) remains the relational identity.
+USER_BRAND_TEXT_SOURCE_TYPE_MISSION = "genome_mission"
+USER_BRAND_TEXT_SOURCE_TYPE_SNIPPET = "genome_snippet"
 
 
 def _utc_now() -> str:
@@ -66,6 +76,50 @@ def ensure_canonical_schema(conn: sqlite3.Connection) -> None:
             metadata_json TEXT,
             created_at TEXT,
             updated_at TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS brand_texts (
+            text_id TEXT,
+            brand_id TEXT,
+            brand_name TEXT,
+            source_type TEXT,
+            text TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS brand_texts_raw (
+            text_id TEXT,
+            brand_id TEXT,
+            brand_name TEXT,
+            segment TEXT,
+            country TEXT,
+            source_type TEXT,
+            page_name TEXT,
+            category TEXT,
+            year_range TEXT,
+            text TEXT,
+            url TEXT,
+            data_collected TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS brand_chunks (
+            chunk_id TEXT PRIMARY KEY,
+            text_id TEXT NOT NULL,
+            brand_id TEXT NOT NULL,
+            brand_name TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            chunk_text TEXT NOT NULL,
+            char_count INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
         )
         """
     )
@@ -199,6 +253,119 @@ def _build_feature_bundle(
     }
 
 
+# ── Stage 5.1: user-brand RAG source materialization ───────────────────────
+#
+# The Genome Setup contract supplies exactly 8 user-authored texts (1 mission
+# + 7 snippets). This is intentionally NOT stretched to match the competitor
+# corpus volume rule (>=30 source texts / >=50 chunks per brand) — that rule
+# governs reference/competitor brands only. Fabricating extra user texts or
+# duplicating chunks to hit those thresholds would make the RAG grounding
+# untruthful, so the user brand instead gets exactly as many chunks as its
+# real content honestly produces.
+
+def _user_source_rows(
+    designation: str,
+    mission_core_vision: str,
+    snippets: list[str],
+) -> list[dict[str, str]]:
+    """Build the 8 canonical user-brand source rows (mission + 7 snippets)."""
+    rows = [
+        {
+            "text_id": f"{USER_BRAND_ALIAS}__mission",
+            "brand_id": USER_BRAND_ALIAS,
+            "brand_name": designation,
+            "source_type": USER_BRAND_TEXT_SOURCE_TYPE_MISSION,
+            "text": mission_core_vision,
+        }
+    ]
+    for index, snippet in enumerate(snippets, start=1):
+        rows.append(
+            {
+                "text_id": f"{USER_BRAND_ALIAS}__snippet_{index:03d}",
+                "brand_id": USER_BRAND_ALIAS,
+                "brand_name": designation,
+                "source_type": USER_BRAND_TEXT_SOURCE_TYPE_SNIPPET,
+                "text": snippet,
+            }
+        )
+    return rows
+
+
+def _user_chunks_from_source_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """
+    Deterministically chunk the user source rows using the same
+    sentence-aware packer as the competitor builder
+    (scripts.build_brand_chunks.pack_text_into_chunks), WITHOUT the
+    competitor-only MIN_CHUNKS_PER_BRAND>=50 volume rule.
+
+    Raises ValueError (reported honestly, never fabricated) if any
+    nonblank source text yields zero chunks.
+    """
+    chunks: list[dict[str, Any]] = []
+    for row in rows:
+        cleaned = clean_text(row["text"])
+        if not cleaned:
+            raise ValueError(f"user source text_id={row['text_id']} is blank after cleaning")
+
+        pack = pack_text_into_chunks(row["text_id"], cleaned)
+        if pack.error or not pack.chunks:
+            raise ValueError(
+                f"user source text_id={row['text_id']} produced zero chunks: {pack.error or 'no chunks'}"
+            )
+
+        for idx, piece in enumerate(pack.chunks):
+            chunk_text = piece["text"]
+            chunks.append(
+                {
+                    "chunk_id": f"{row['text_id']}__chunk_{idx:03d}",
+                    "text_id": row["text_id"],
+                    "brand_id": row["brand_id"],
+                    "brand_name": row["brand_name"],
+                    "source_type": row["source_type"],
+                    "chunk_text": chunk_text,
+                    "char_count": len(chunk_text),
+                }
+            )
+    return chunks
+
+
+def _replace_user_source_texts(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, str]],
+    now: str,
+) -> None:
+    """Atomically replace ONLY user-owned brand_texts/brand_texts_raw rows."""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM brand_texts WHERE brand_id = ?", (USER_BRAND_ALIAS,))
+    cur.execute("DELETE FROM brand_texts_raw WHERE brand_id = ?", (USER_BRAND_ALIAS,))
+    for row in rows:
+        cur.execute(
+            "INSERT INTO brand_texts (text_id, brand_id, brand_name, source_type, text, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (row["text_id"], row["brand_id"], row["brand_name"], row["source_type"], row["text"], now),
+        )
+        cur.execute(
+            "INSERT INTO brand_texts_raw "
+            "(text_id, brand_id, brand_name, segment, country, source_type, page_name, category, year_range, text, url, data_collected) "
+            "VALUES (?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, NULL, ?)",
+            (row["text_id"], row["brand_id"], row["brand_name"], row["source_type"], row["text"], now),
+        )
+
+
+def _replace_user_chunks(conn: sqlite3.Connection, chunks: list[dict[str, Any]]) -> None:
+    """Atomically replace ONLY user-owned brand_chunks rows."""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM brand_chunks WHERE brand_id = ?", (USER_BRAND_ALIAS,))
+    cur.executemany(
+        "INSERT INTO brand_chunks (chunk_id, text_id, brand_id, brand_name, source_type, chunk_text, char_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (c["chunk_id"], c["text_id"], c["brand_id"], c["brand_name"], c["source_type"], c["chunk_text"], c["char_count"])
+            for c in chunks
+        ],
+    )
+
+
 def initialize_user_genome(
     conn: sqlite3.Connection,
     designation: str,
@@ -214,6 +381,11 @@ def initialize_user_genome(
 
     bundle = _build_feature_bundle(cleaned_designation, cleaned_mission, cleaned_snippets)
     now = _utc_now()
+
+    # Compute user source rows/chunks BEFORE opening the write transaction so
+    # a chunking failure never leaves a half-updated profile+corpus state.
+    user_source_rows = _user_source_rows(cleaned_designation, cleaned_mission, cleaned_snippets)
+    user_chunks = _user_chunks_from_source_rows(user_source_rows)
 
     cur = conn.cursor()
     existing_row = cur.execute(
@@ -257,6 +429,10 @@ def initialize_user_genome(
             (USER_BRAND_DB_ID, cleaned_designation, cleaned_mission, created_at, now),
         )
         cur.execute("DELETE FROM brand_profile WHERE brand_id = ?", (USER_BRAND_DB_ID,))
+        # Reinitialization atomically replaces ONLY user-owned rows; competitor
+        # brand_texts/brand_texts_raw/brand_chunks and analysis_history are untouched.
+        _replace_user_source_texts(conn, user_source_rows, now)
+        _replace_user_chunks(conn, user_chunks)
         cur.execute(
             """
             INSERT INTO brand_profile (

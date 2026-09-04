@@ -1,9 +1,9 @@
-import { motion } from "framer-motion";
+import { motion as Motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
 export const Button = ({ children, primary = false, className = "", icon: Icon, onClick, disabled = false, ...props }) => {
     return (
-        <motion.button
+        <Motion.button
             whileHover={!disabled ? { scale: 1.02 } : {}}
             whileTap={!disabled ? { scale: 0.98 } : {}}
             onClick={onClick}
@@ -23,6 +23,6 @@ export const Button = ({ children, primary = false, className = "", icon: Icon, 
             {primary && !disabled && (
                 <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite] skew-x-12" />
             )}
-        </motion.button>
+        </Motion.button>
     );
 };

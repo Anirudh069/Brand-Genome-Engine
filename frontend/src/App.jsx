@@ -3,9 +3,11 @@ import { Loader2 } from 'lucide-react';
 import { MainLayout } from './layouts/MainLayout';
 import { BrandSetup } from './pages/BrandSetup';
 import { ConsistencyCheck } from './pages/ConsistencyCheck';
+import { Rewrite } from './pages/Rewrite';
 import { Benchmarking } from './pages/Benchmarking';
 import { Analytics } from './pages/Analytics';
-import { API_BASE } from './lib/constants';
+import { DevTools } from './pages/DevTools';
+import { fetchGenome } from './lib/genomeApi';
 
 function App() {
   const [activeTab, setActiveTab] = useState('setup');
@@ -14,12 +16,8 @@ function App() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetch(`${API_BASE}/genome`);
-      if (res.ok) {
-        const data = await res.json();
-        console.log("Global Profile State Fetched:", data);
-        setProfile(data);
-      }
+      const data = await fetchGenome();
+      setProfile(data);
     } catch (err) {
       console.error("Failed to fetch profile", err);
     } finally {
@@ -44,10 +42,12 @@ function App() {
 
   return (
     <MainLayout activeTab={activeTab} setActiveTab={setActiveTab}>
-      {activeTab === 'setup' && <BrandSetup profile={profile} fetchProfile={fetchProfile} />}
+      {activeTab === 'setup' && <BrandSetup profile={profile} fetchProfile={fetchProfile} onOpenDevTools={() => setActiveTab('devtools')} />}
       {activeTab === 'check' && <ConsistencyCheck profile={profile} onGoToSetup={() => setActiveTab('setup')} />}
+      {activeTab === 'rewrite' && <Rewrite profile={profile} onGoToSetup={() => setActiveTab('setup')} />}
       {activeTab === 'bench' && <Benchmarking profile={profile} onGoToSetup={() => setActiveTab('setup')} />}
       {activeTab === 'analytics' && <Analytics profile={profile} />}
+      {activeTab === 'devtools' && <DevTools />}
     </MainLayout>
   );
 }

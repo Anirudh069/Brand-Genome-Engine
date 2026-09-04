@@ -6,28 +6,26 @@ import { TextArea } from "../components/ui/TextArea";
 import { Button } from "../components/ui/Button";
 import { Metric } from "../components/ui/Metric";
 import { DNAAnimation } from "../components/ui/DNAAnimation";
-import { API_BASE } from "../lib/constants";
+import { initGenome } from "../lib/genomeApi";
 
-export const BrandSetup = ({ profile, fetchProfile }) => {
-    const defaultForm = {
-        designation: '',
-        mission_core_vision: '',
-        tone: 'Sophisticated',
-        snippets: ['', '', '', '', '', '', '']
-    };
-    const [form, setForm] = useState(defaultForm);
+const DEFAULT_FORM = {
+    designation: '',
+    mission_core_vision: '',
+    tone: 'Sophisticated',
+    snippets: ['', '', '', '', '', '', '']
+};
+
+export const BrandSetup = ({ profile, fetchProfile, onOpenDevTools }) => {
+    const [form, setForm] = useState(DEFAULT_FORM);
     const [loading, setLoading] = useState(false);
     const [initializing, setInitializing] = useState(false);
     const [progress, setProgress] = useState(0);
-    const [rebuilding, setRebuilding] = useState(false);
-    const [rebuildStatus, setRebuildStatus] = useState(null);
     const [saveStatus, setSaveStatus] = useState(null);
     const [saveError, setSaveError] = useState(null);
 
     // Synchronize form with profile when profile is loaded/updated
     useEffect(() => {
         if (profile) {
-             console.log("Populating form from server profile:", profile);
              setForm({
                 designation: profile.designation || profile.brand_name || profile.name || '',
                 mission_core_vision: profile.mission_core_vision || profile.mission || '',
@@ -39,28 +37,11 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
 
     // save draft to localStorage ONLY if user has started typing
     useEffect(() => {
-        const isDefault = JSON.stringify(form) === JSON.stringify(defaultForm);
+        const isDefault = JSON.stringify(form) === JSON.stringify(DEFAULT_FORM);
         if (!initializing && !isDefault) {
             localStorage.setItem('genome_draft', JSON.stringify(form));
         }
     }, [form, initializing]);
-
-    const handleRebuild = async () => {
-        setRebuilding(true);
-        setRebuildStatus("Rebuilding Vector Index...");
-        try {
-            const res = await fetch(`${API_BASE}/index/rebuild`, { method: 'POST' });
-            if (res.ok) {
-                setRebuildStatus("Success: Index Rebuilt");
-            } else {
-                setRebuildStatus("Failed to rebuild index");
-            }
-        } catch (err) {
-            setRebuildStatus("Error: Network anomaly");
-        }
-        setRebuilding(false);
-        setTimeout(() => setRebuildStatus(null), 3500);
-    };
 
     const handleSave = async () => {
         setSaveStatus(null);
@@ -87,36 +68,22 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
         }, 600);
 
         try {
-            const res = await fetch(`${API_BASE}/genome/init`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    designation: form.designation,
-                    mission_core_vision: form.mission_core_vision,
-                    snippets: form.snippets,
-                })
+            await initGenome({
+                designation: form.designation,
+                mission_core_vision: form.mission_core_vision,
+                snippets: form.snippets,
             });
 
-            if (res.ok) {
-                // Keep the overlay for a bit longer to look premium
-                setProgress(100);
-                setTimeout(async () => {
-                    await fetchProfile();
-                    setSaveStatus("Genome initialised successfully.");
-                    setInitializing(false);
-                    localStorage.removeItem('genome_draft');
-                }, 1000);
-            } else {
-                const data = await res.json().catch(() => ({}));
-                const message = Array.isArray(data?.detail)
-                    ? data.detail.map(item => item?.msg || item?.message || "Validation error").join("; ")
-                    : data?.detail || data?.message || "Failed to initialise genome.";
-                setSaveError(message);
+            // Keep the overlay for a bit longer to look premium
+            setProgress(100);
+            setTimeout(async () => {
+                await fetchProfile();
+                setSaveStatus("Genome updated. Rebuild the RAG index from Dev Tools before Rewrite.");
                 setInitializing(false);
-            }
+                localStorage.removeItem('genome_draft');
+            }, 1000);
         } catch (err) {
-            console.error(err);
-            setSaveError("Network anomaly: Genome initialisation failed.");
+            setSaveError(err.message || "Failed to initialise genome.");
             setInitializing(false);
         } finally {
             clearInterval(interval);
@@ -277,7 +244,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                                 <div>
                                     <span className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Semantic Anchors</span>
                                     <div className="flex flex-wrap gap-2.5">
-                                        {(profile.top_keywords || profile.keywords || []).map((t, i) => (
+                                        {(profile.top_keywords || profile.keywords || []).map((t) => (
                                             <span
                                                 key={t}
                                                 className="px-4 py-1.5 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-full text-[11px] font-bold tracking-wide transition-transform hover:-translate-y-1 cursor-default shadow-sm"
@@ -311,26 +278,11 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                             <Settings size={18} className="text-gray-400" />
                             <h3 className="text-sm font-bold text-white uppercase tracking-widest">System Controls</h3>
                         </div>
-                        <p className="text-xs text-gray-500 mb-6">Manually trigger vector index rebuild and align system cache.</p>
+                        <p className="text-xs text-gray-500 mb-6">Controlled rebuild actions now live in Dev Tools.</p>
 
-                        <Button
-                            className={`w-full py-3 text-sm font-bold transition-all ${rebuilding ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' : 'bg-[#111116] border border-white/10 text-gray-300 hover:border-white/30'}`}
-                            onClick={handleRebuild}
-                            disabled={rebuilding}
-                        >
-                            {rebuilding ? <Loader2 className="animate-spin inline mr-2" size={16} /> : null}
-                            {rebuilding ? "Rebuilding Index..." : "Force Index Rebuild"}
+                        <Button className="w-full py-3 text-sm font-bold" onClick={onOpenDevTools}>
+                            Open Dev Tools
                         </Button>
-
-                        {rebuildStatus && (
-                            <div className={`mt-4 text-xs font-bold px-4 py-3 rounded-xl border ${
-                                rebuildStatus.includes('Error') || rebuildStatus.includes('Failed')
-                                    ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                            }`}>
-                                {rebuildStatus}
-                            </div>
-                        )}
                     </Card>
                 </div>
             </div>

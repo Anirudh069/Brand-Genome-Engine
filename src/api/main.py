@@ -6,22 +6,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Literal
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
 from dotenv import load_dotenv
 
 # Canonical scorer (src/scoring/consistency.py)
-from src.scoring.consistency import compute_consistency_score, generate_edit_plan, score_against_user_genome
+from src.scoring.consistency import score_against_user_genome
 import numpy as np
 
 from src.api.genome_service import (
     EMBEDDING_DIM,
-    USER_BRAND_ALIAS,
     ensure_canonical_schema,
     load_active_user_genome,
     get_user_genome_summary,
     initialize_user_genome,
-    is_user_brand_identifier,
     write_history_event,
 )
 from src.benchmarking.market_benchmark import (
@@ -30,26 +29,24 @@ from src.benchmarking.market_benchmark import (
     run_market_benchmark,
 )
 
-# Optional: retrieval index for benchmarking
+# Optional: retrieval index for benchmarking (legacy brand-centroid tool,
+# unrelated to the Stage 5 chunk-level RAG index below)
 try:
     from src.benchmarking.retrieval import load_index, query as query_index, backend_name
     _RETRIEVAL_AVAILABLE = True
 except ImportError:
     _RETRIEVAL_AVAILABLE = False
 
-# Optional for OpenAI LLM rewrite logic
-try:
-    import openai
-except ImportError:
-    openai = None
+# Stage 5: canonical chunk-level RAG retrieval service
+from src.retrieval.rag_service import MAX_TOP_K, MIN_TOP_K, RagError, retrieve_chunks as rag_retrieve_chunks
+
+# Stage 6: canonical Rewrite orchestration (real OpenAI, no fake grounding)
+from src.rewrite.rewrite_service import RewriteError, rewrite_copy
+from src.rebuild.rebuild_service import RebuildError, rebuild_chunks, rebuild_index, rebuild_user_profile
 
 # Load environment variables
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", 30))
 SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "data/brand_data.db")
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 FEATURES_PATH = os.getenv("FEATURES_PATH", "data/processed/features.parquet")
@@ -60,13 +57,6 @@ ANALYTICS_CACHE_PATH = os.getenv("ANALYTICS_CACHE_PATH", "data/processed/analyti
 # Configure logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Configure OpenAI if available and key provided
-if openai and OPENAI_API_KEY and not OPENAI_API_KEY.startswith("sk-placeholder"):
-    openai.api_key = OPENAI_API_KEY
-    client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=LLM_TIMEOUT_SECONDS)
-else:
-    client = None
 
 app = FastAPI(title="Brand Genome Engine", version="2.0.0")
 
@@ -120,98 +110,6 @@ _FALLBACK_BRANDS = [
 ]
 
 
-def get_brand_profile(brand_id: str) -> Optional[dict]:
-    """Return the brand profile dict from the DB, or *None* if not found."""
-    if is_user_brand_identifier(brand_id):
-        conn = get_db_connection()
-        if not conn:
-            return None
-        try:
-            return get_user_genome_summary(conn)
-        finally:
-            conn.close()
-
-    profile = None
-    conn = get_db_connection()
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT profile_json FROM brand_profiles WHERE brand_id = ?", (brand_id,))
-            row = cur.fetchone()
-            if row:
-                profile = json.loads(row["profile_json"])
-                # Ensure compatibility keys
-                if "tone_label" not in profile and "tone" in profile:
-                    profile["tone_label"] = profile["tone"]
-                if "brand_name" not in profile and "name" in profile:
-                    profile["brand_name"] = profile["name"]
-
-                return profile
-        except sqlite3.Error as e:
-            logger.error(f"DB Error fetching profile: {e}")
-        finally:
-            conn.close()
-
-    logger.info(f"API -> Fetched profile for brand_id: {brand_id}. Success: {profile is not None}")
-    if profile:
-        logger.info(f"API -> Profile Detail: {profile.get('brand_name', 'No Name')}, Snippets: {profile.get('snippetsCount', 0)}")
-    return profile
-
-
-def _resolve_history_brand_id(conn: sqlite3.Connection, brand_identifier: str) -> int:
-    if is_user_brand_identifier(brand_identifier):
-        return 0
-
-    normalized = brand_identifier.strip().lower().replace(" ", "_")
-    cur = conn.cursor()
-    cur.execute("SELECT id, designation FROM brands")
-    for row in cur.fetchall():
-        designation = str(row["designation"] or "").strip().lower().replace(" ", "_")
-        if normalized in {designation, str(row["id"])}:
-            return int(row["id"])
-    return 0
-
-
-# ── RAG: grounding chunks retrieval ──────────────────────────────────────
-
-def retrieve_grounding_chunks(brand_id: str, n_chunks: int = 3) -> List[str]:
-    """Retrieve brand-specific example text chunks from DB."""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    try:
-        cur = conn.cursor()
-        # Try brand_chunks table first
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='brand_chunks'"
-        )
-        if cur.fetchone():
-            cur.execute(
-                "SELECT chunk_text FROM brand_chunks WHERE brand_id = ? LIMIT ?",
-                (brand_id, n_chunks),
-            )
-            rows = cur.fetchall()
-            if rows:
-                return [row["chunk_text"] for row in rows]
-        # Fallback: pull raw texts from brand_texts
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='brand_texts'"
-        )
-        if cur.fetchone():
-            cur.execute(
-                "SELECT text FROM brand_texts WHERE brand_id = ? LIMIT ?",
-                (brand_id, n_chunks),
-            )
-            rows = cur.fetchall()
-            if rows:
-                return [row["text"] for row in rows]
-    except sqlite3.Error as e:
-        logger.error(f"Error retrieving chunks: {e}")
-    finally:
-        conn.close()
-    return []
-
-
 # ── Benchmark helpers ─────────────────────────────────────────────────────
 
 _index_cache: dict[str, Any] = {}
@@ -252,9 +150,26 @@ def _load_features_for_benchmarking():
 # --- MODELS ---
 
 class RewriteRequest(BaseModel):
-    text: str
-    brand_id: str
-    n_grounding_chunks: Optional[int] = 3
+    model_config = ConfigDict(extra="forbid")
+
+    text: StrictStr
+    top_k: Optional[int] = None
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_blank(cls, value: StrictStr) -> StrictStr:
+        if not value.strip():
+            raise ValueError("text must be nonblank")
+        return value
+
+    @field_validator("top_k")
+    @classmethod
+    def _top_k_in_range(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        if not (MIN_TOP_K <= value <= MAX_TOP_K):
+            raise ValueError(f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
+        return value
 
 class ConsistencyLegacyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -279,9 +194,6 @@ class ConsistencyScoreRequest(BaseModel):
         if not value.strip():
             raise ValueError("text must be nonblank")
         return value
-
-class RebuildProfileRequest(BaseModel):
-    brand_id: str
 
 def _validate_nonblank_text(value: StrictStr, field_name: str) -> StrictStr:
     if not value.strip():
@@ -471,177 +383,80 @@ def score_consistency(req: ConsistencyScoreRequest):
         conn.close()
 
 
+class RagRetrieveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: StrictStr
+    brand_id: StrictStr
+    top_k: Optional[int] = None
+
+
+@app.post("/api/rag/retrieve")
+def rag_retrieve(req: RagRetrieveRequest):
+    """
+    Stage 5 infrastructure endpoint: strict brand-scoped semantic retrieval
+    over the canonical chunk-level RAG index. Does not write analysis_history.
+    """
+    try:
+        result = rag_retrieve_chunks(req.text, req.brand_id, top_k=req.top_k)
+    except RagError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return result
+
+
 @app.post("/api/rewrite")
 def rewrite(req: RewriteRequest):
-    if len(req.text.strip()) < 10:
-        return {
-            "brand_id": req.brand_id,
-            "brand_name": None,
-            "original_text": req.text,
-            "rewritten_text": None,
-            "suggestions": [],
-            "grounding_chunks_used": [],
-            "score_before": None,
-            "score_after": None,            "error": "text_too_short",
-        }
-
-    brand_profile = get_brand_profile(req.brand_id)
-    if brand_profile is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "profile_missing",
-                    "brand_id": req.brand_id},
-        )
-    brand_name = brand_profile.get("brand_name", req.brand_id.replace("_", " ").title())
-
-    # 1. Score Before (real NLP scoring)
-    score_before = compute_consistency_score(req.text, brand_profile)
-
-    # 2. Generate Edit Plan (real NLP analysis)
-    edit_plan = generate_edit_plan(req.text, brand_profile)
-
-    # 3. Retrieve Grounding Chunks (RAG from DB)
-    chunks = retrieve_grounding_chunks(req.brand_id, req.n_grounding_chunks or 3)
-    if not chunks:
-        chunks = [
-            f"A {brand_name} watch is more than an instrument of precision — it is a statement of enduring achievement."
-        ]
-    edit_plan["grounding_chunks"] = chunks
-
-    # 4. Call LLM to Rewrite
-    rewritten_text = None
-    if client:
-        try:
-            goals = ', '.join(edit_plan.get('goals', []))
-            tone_dir = edit_plan.get('tone_direction', '')
-            style_rules = ', '.join(edit_plan.get('style_rules', []))
-            prefer = ', '.join(edit_plan.get('prefer_terms', []))
-            avoid = ', '.join(edit_plan.get('avoid_terms', []))
-            prompt = (
-                f"Rewrite the following text to align with the {brand_name} brand voice.\n"
-                f"Goals: {goals}\n"
-                f"Tone: {tone_dir}\n"
-                f"Style Rules: {style_rules}\n"
-                f"Prefer terms: {prefer}\n"
-                f"Avoid terms: {avoid}\n\n"
-                f"Brand Content Examples:\n"
-            )
-            for c in chunks:
-                prompt += f"- {c}\n"
-            prompt += f"\nOriginal Text:\n{req.text}\n\nRewritten Text:"
-
-            response = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=250,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-            rewritten_text = response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"LLM Error: {e}")
-            return {
-                "brand_id": req.brand_id,
-                "brand_name": brand_name,
-                "original_text": req.text,
-                "rewritten_text": None,
-                "suggestions": [],
-                "grounding_chunks_used": [],
-                "score_before": None,
-                "score_after": None,
-                "error": "llm_timeout" if "time" in str(e).lower() else f"llm_error: {e}",
-            }
-    else:
-        # Fallback rewrite if no API key
-        rewritten_text = (
-            f"This timepiece embodies effortless precision — an enduring "
-            f"companion for those who pursue excellence in every endeavour."
-        )
-
-    # 5. Score After (re-score the rewritten text with real NLP)
-    score_after = compute_consistency_score(rewritten_text, brand_profile)    # Build suggestions from edit plan
-    prefer_terms_str = ', '.join(edit_plan.get('prefer_terms', [])[:3])
-    tone_dir_str = edit_plan.get('tone_direction', '')
-    suggestions_list = [
-        "Replace casual language with more measured, elevated vocabulary.",
-        f"Introduce brand-anchored terms: {prefer_terms_str}.",
-        f"Align tone toward: {tone_dir_str}.",
-    ]
-    for goal in edit_plan.get("goals", []):
-        if goal not in suggestions_list:
-            suggestions_list.append(goal)
-
-    # ── Log to DB ─────────────────────────────────────────
+    """
+    Stage 6 canonical Rewrite: scores the input against the persisted USER
+    genome (same scorer as /api/consistency/score), retrieves grounding from
+    the Stage 5 semantic user_brand RAG index, makes ONE OpenAI generation
+    request, re-scores the result with the SAME scorer, and writes exactly
+    one "rewrite" analysis_history row. Never selects a competitor brand.
+    """
     conn = get_db_connection()
-    if conn:
-        try:
-            history_brand_id = _resolve_history_brand_id(conn, req.brand_id)
-            write_history_event(
-                conn,
-                brand_id=history_brand_id,
-                event_type="rewrite",
-                input_text=req.text,
-                pre_score=score_before,
-                post_score=score_after,
-                diagnostics_json=suggestions_list,
-                extra_json={
-                    "brand_id": req.brand_id,
-                    "grounding_chunks_used": chunks,
-                    "improved": score_after["overall_score"] > score_before["overall_score"],
-                },
-            )
-        except sqlite3.Error as e:
-            logger.error(f"Failed to log rewrite: {e}")
-        finally:
-            conn.close()
-
-    return {
-        "brand_id": req.brand_id,
-        "brand_name": brand_name,
-        "original_text": req.text,
-        "rewritten_text": rewritten_text,
-        "suggestions": suggestions_list,
-        "grounding_chunks_used": chunks,
-        "score_before": score_before,
-        "score_after": score_after,
-        "error": None,
-    }
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection currently unavailable.")
+    try:
+        return rewrite_copy(conn, req.text, top_k=req.top_k)
+    except RewriteError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    finally:
+        conn.close()
 
 
+def _rebuild_response(payload: dict[str, Any], status_code: int = 200):
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.post("/api/rebuild/profile")
 @app.post("/api/profile/rebuild")
-def rebuild_profile(req: dict):
-    brand_id = req.get("brand_id", "rolex")
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "status": "success",
-        "brand_id": brand_id,
-        "built_at": now,
-        "n_texts": 87,
-    }
+def rebuild_profile():
+    try:
+        body = rebuild_user_profile()
+    except RebuildError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return _rebuild_response(body)
 
 
+@app.post("/api/rebuild/index")
 @app.post("/api/index/rebuild")
-def rebuild_index():
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "status": "success",
-        "backend": backend_name() if _RETRIEVAL_AVAILABLE else "none",
-        "n_brands": 5,
-        "index_path": INDEX_PATH,
-        "built_at": now,
-    }
+def rebuild_index_endpoint():
+    try:
+        body = rebuild_index()
+    except RebuildError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return _rebuild_response(body)
 
 
+@app.post("/api/rebuild/chunks")
 @app.post("/api/chunks/rebuild")
-def rebuild_chunks():
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "status": "success",
-        "backend": backend_name() if _RETRIEVAL_AVAILABLE else "none",
-        "n_chunks": 412,
-        "index_path": "embeddings/brand_chunks_index.faiss",
-        "built_at": now,
-    }
+def rebuild_chunks_endpoint():
+    try:
+        body = rebuild_chunks()
+    except RebuildError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    status_code = 207 if body.get("status") == "partial" else 200
+    return _rebuild_response(body, status_code=status_code)
 
 
 @app.get("/api/analytics")

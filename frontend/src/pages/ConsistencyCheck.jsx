@@ -4,7 +4,7 @@ import { Card } from "../components/ui/Card";
 import { TextArea } from "../components/ui/TextArea";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
-import { API_BASE } from "../lib/constants";
+import { scoreConsistency } from "../lib/consistencyApi";
 
 const clampScore = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
@@ -42,35 +42,15 @@ export const ConsistencyCheck = ({ profile, onGoToSetup }) => {
         setError(null);
 
         try {
-            const res = await fetch(`${API_BASE}/consistency/score`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    text: copyText,
-                }),
-            });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                const rawErr = data?.detail?.error || data?.error || "unknown";
-                if (rawErr === "genome_not_initialized") {
-                    setForceGenomeBlock(true);
-                    setError("Genome Setup Required: Initialize the active genome before scoring copy.");
-                    setResult(null);
-                    setLoading(false);
-                    return;
-                }
-                setError(data?.detail?.message || data?.detail || rawErr || "Unable to score copy.");
-                setResult(null);
-                setLoading(false);
-                return;
-            }
-
+            const data = await scoreConsistency(copyText);
             setResult(data);
         } catch (err) {
-            console.error(err);
-            setError("Network anomaly: Connection to engine failed.");
+            if (err.code === "genome_not_initialized") {
+                setForceGenomeBlock(true);
+                setError("Genome Setup Required: Initialize the active genome before scoring copy.");
+            } else {
+                setError(err.message || "Unable to score copy.");
+            }
             setResult(null);
         }
 

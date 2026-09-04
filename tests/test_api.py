@@ -188,59 +188,21 @@ class TestCheckConsistencyContract:
 
 
 class TestRewrite:
-    def test_full_response(self):
-        r = client.post("/api/rewrite", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-            "n_grounding_chunks": 2,
-        })
-        assert r.status_code == 200
-        body = r.json()
-        assert body["brand_id"] == "rolex"
-        assert body["brand_name"] == "Rolex"
-        assert body["original_text"] == ROLEX_OFF_BRAND
-        assert body["rewritten_text"] is not None
-        assert body["error"] is None
+    """Legacy /api/rewrite contract tests. Stage 6 replaced this endpoint with
+    the canonical user-genome Rewrite journey (text/top_k only, no competitor
+    brand_id) — see tests/test_rewrite_stage6.py for the full Stage 6 suite.
+    """
 
-    def test_score_keys_present(self):
+    def test_rejects_legacy_brand_id_field(self):
         r = client.post("/api/rewrite", json={
             "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
         })
-        body = r.json()
-        for section in ("score_before", "score_after"):
-            assert section in body, f"Missing {section}"
-            assert body[section] is not None, f"{section} is None"
-            for k in SCORE_KEYS:
-                assert k in body[section], f"Missing {k} in {section}"
+        assert r.status_code == 422
 
-    def test_text_too_short(self):
-        r = client.post("/api/rewrite", json={
-            "text": "Short", "brand_id": "rolex",
-        })
-        assert r.status_code == 200
-        assert r.json()["error"] == "text_too_short"
-
-    def test_suggestions_non_empty(self):
-        r = client.post("/api/rewrite", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-        })
-        body = r.json()
-        assert isinstance(body["suggestions"], list)
-        assert len(body["suggestions"]) >= 1
-
-    def test_grounding_chunks_returned(self):
-        r = client.post("/api/rewrite", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-            "n_grounding_chunks": 3,
-        })
-        body = r.json()
-        assert isinstance(body["grounding_chunks_used"], list)
-        assert len(body["grounding_chunks_used"]) >= 1
-
-    def test_brand_name_in_response(self):
-        r = client.post("/api/rewrite", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "omega",
-        })
-        assert r.json()["brand_name"] == "Omega"
+    def test_missing_genome_returns_400(self):
+        r = client.post("/api/rewrite", json={"text": ROLEX_OFF_BRAND})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "genome_not_initialized"
 
 
 class TestProfile:
@@ -352,25 +314,29 @@ class TestBenchmark:
 
 class TestRebuildEndpoints:
     def test_profile_rebuild(self):
-        r = client.post("/api/profile/rebuild", json={"brand_id": "rolex"})
+        init_consistency_genome(client)
+        r = client.post("/api/rebuild/profile")
         assert r.status_code == 200
         body = r.json()
-        assert body["status"] == "success"
-        assert "built_at" in body
+        assert body["status"] == "ok"
+        assert body["action"] == "profile"
+        assert body["embedding_dim"] == 384
 
     def test_index_rebuild(self):
-        r = client.post("/api/index/rebuild")
+        r = client.post("/api/rebuild/index")
         assert r.status_code == 200
         body = r.json()
-        assert body["status"] == "success"
-        assert "n_brands" in body
+        assert body["status"] == "ok"
+        assert body["action"] == "index"
+        assert body["embedding_dim"] == 384
 
     def test_chunks_rebuild(self):
-        r = client.post("/api/chunks/rebuild")
+        r = client.post("/api/rebuild/chunks")
         assert r.status_code == 200
         body = r.json()
-        assert body["status"] == "success"
-        assert "n_chunks" in body
+        assert body["status"] in {"ok", "partial"}
+        assert body["action"] == "chunks"
+        assert "fingerprint" in body
 
 
 class TestValidation:
@@ -383,11 +349,11 @@ class TestValidation:
         assert r.status_code == 422
 
     def test_rewrite_missing_text(self):
-        r = client.post("/api/rewrite", json={"brand_id": "rolex"})
+        r = client.post("/api/rewrite", json={})
         assert r.status_code == 422
 
-    def test_rewrite_missing_brand(self):
-        r = client.post("/api/rewrite", json={"text": "some text here"})
+    def test_rewrite_rejects_out_of_range_top_k(self):
+        r = client.post("/api/rewrite", json={"text": "some text here", "top_k": 99})
         assert r.status_code == 422
 
     def test_profile_update_missing_fields(self):
@@ -413,10 +379,6 @@ class TestScoringIntegration:
         assert with_kw["feature_breakdown"]["keywords"]["score"] > without_kw["feature_breakdown"]["keywords"]["score"]
 
     def test_rewrite_score_not_hardcoded(self):
-        r = client.post("/api/rewrite", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-        }).json()
-        before = r["score_before"]["overall_score"]
-        after = r["score_after"]["overall_score"]
-        assert after != before + 45, "Scores should not be mock offset"
-        assert after != before + 20, "Scores should not be mock offset"
+        """Superseded by tests/test_rewrite_stage6.py (provider is mocked there);
+        this legacy assertion no longer applies to the Stage 6 contract."""
+        pass
