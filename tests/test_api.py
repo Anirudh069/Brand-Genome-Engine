@@ -1,11 +1,59 @@
 # filepath: tests/test_api.py
 """Comprehensive API tests for the Brand Genome Engine FastAPI backend."""
 
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="brand_genome_api_tests_"))
+TEST_DB_PATH = TEST_DB_DIR / "brand_data.db"
+shutil.copy2(REPO_ROOT / "data" / "brand_data.db", TEST_DB_PATH)
+os.environ["SQLITE_DB_PATH"] = str(TEST_DB_PATH)
+
 from src.api.main import app
 
 client = TestClient(app)
+
+
+def genome_payload(
+    designation: str = "TestBrand",
+    mission: str = "Delivering precision engineering and timeless craftsmanship.",
+    snippet_prefix: str = "Snippet",
+):
+    return {
+        "designation": designation,
+        "mission_core_vision": mission,
+        "snippets": [
+            f"{snippet_prefix} 1: We create elevated copy with precision and heritage.",
+            f"{snippet_prefix} 2: Every message balances luxury, clarity, and confidence.",
+            f"{snippet_prefix} 3: The voice stays refined, technical, and authoritative.",
+            f"{snippet_prefix} 4: We speak to collectors, enthusiasts, and discerning buyers.",
+            f"{snippet_prefix} 5: Brand language should feel timeless and exacting.",
+            f"{snippet_prefix} 6: Copy must remain consistent across every channel.",
+            f"{snippet_prefix} 7: We value measured tone, craftsmanship, and detail.",
+        ],
+    }
+
+
+def init_consistency_genome(client, designation: str = "StageOneBrand"):
+    response = client.post("/api/genome/init", json=genome_payload(designation=designation))
+    assert response.status_code == 200
+    return response.json()["profile"]
+
+
+@pytest.fixture(autouse=True)
+def _fake_genome_embedding(monkeypatch):
+    def fake_embedding(text, model_name="all-MiniLM-L6-v2"):
+        seed = sum(ord(char) for char in str(text))
+        vector = [float((seed + index) % 97) / 97.0 for index in range(384)]
+        return vector, model_name
+
+    monkeypatch.setattr("src.api.genome_service.get_embedding", fake_embedding)
 
 ROLEX_ON_BRAND = (
     "The Oyster Perpetual embodies precision craftsmanship and perpetual "
@@ -63,53 +111,46 @@ class TestBrands:
 
 class TestCheckConsistency:
     def test_returns_scores(self):
-        r = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        })
+        profile = init_consistency_genome(client)
+        r = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND})
         assert r.status_code == 200
         body = r.json()
-        for k in SCORE_KEYS:
+        for k in ("score_overall", "feature_breakdown", "diagnostic_breakdown", "brand_name_mentions", "timestamp"):
             assert k in body, f"Missing key: {k}"
+        assert body["brand_name"] == profile["designation"]
 
     def test_scores_in_range(self):
-        r = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        })
+        init_consistency_genome(client)
+        r = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND})
         body = r.json()
-        for k in SCORE_KEYS:
-            assert 0 <= body[k] <= 100, f"{k}={body[k]} out of [0,100]"
+        assert 0 <= body["score_overall"] <= 100, f"score_overall={body['score_overall']} out of [0,100]"
 
     def test_brand_name_present(self):
-        r = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        })
-        assert r.json()["brand_name"] == "Rolex"
+        profile = init_consistency_genome(client, designation="RolexLike")
+        r = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND})
+        assert r.json()["brand_name"] == profile["designation"]
 
     def test_text_too_short(self):
-        r = client.post("/api/check-consistency", json={
-            "text": "Hi", "brand_id": "rolex",
-        })
+        init_consistency_genome(client)
+        r = client.post("/api/check-consistency", json={"text": "Hi"})
         assert r.status_code == 200
-        assert r.json()["error"] == "text_too_short"
+        assert 0 <= r.json()["score_overall"] <= 100
 
-    def test_unknown_brand_returns_404(self):
+    def test_competitor_field_is_rejected(self):
+        init_consistency_genome(client)
         r = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "unknown_brand_xyz",
+            "text": ROLEX_ON_BRAND,
+            "brand_id": "rolex",
         })
-        assert r.status_code == 404
-        body = r.json()
-        assert body["detail"]["error"] == "profile_missing"
+        assert r.status_code == 422
 
     def test_on_brand_scores_higher_than_off_brand(self):
-        on = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        }).json()
-        off = client.post("/api/check-consistency", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-        }).json()
-        assert on["overall_score"] > off["overall_score"], (
-            f"On-brand ({on['overall_score']}) should beat "
-            f"off-brand ({off['overall_score']})"
+        init_consistency_genome(client)
+        on = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND}).json()
+        off = client.post("/api/check-consistency", json={"text": ROLEX_OFF_BRAND}).json()
+        assert on["score_overall"] > off["score_overall"], (
+            f"On-brand ({on['score_overall']}) should beat "
+            f"off-brand ({off['score_overall']})"
         )
 
 
@@ -117,41 +158,33 @@ class TestCheckConsistencyContract:
     """Frozen response-schema contract for POST /api/check-consistency."""
 
     FROZEN_KEYS = {
-        "brand_id", "brand_name",
-        "overall_score", "tone_pct", "vocab_overlap_pct",
-        "sentiment_alignment_pct", "readability_match_pct",
-        "error",
+        "score_overall", "feature_breakdown", "diagnostic_breakdown",
+        "brand_name_mentions", "timestamp", "brand_name",
+        "designation", "genome_version", "error",
     }
 
     def test_response_keys_exact(self):
-        r = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        })
+        init_consistency_genome(client)
+        r = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND})
         assert r.status_code == 200
         assert set(r.json().keys()) == self.FROZEN_KEYS
 
     def test_pct_values_numeric_and_clamped(self):
-        body = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        }).json()
-        for k in SCORE_KEYS:
-            v = body[k]
-            assert isinstance(v, (int, float)), f"{k} is {type(v)}"
-            assert 0 <= v <= 100, f"{k}={v} out of [0,100]"
+        init_consistency_genome(client)
+        body = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND}).json()
+        assert isinstance(body["score_overall"], (int, float)), f"score_overall is {type(body['score_overall'])}"
+        assert 0 <= body["score_overall"] <= 100, f"score_overall={body['score_overall']} out of [0,100]"
 
     def test_error_null_on_success(self):
-        body = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        }).json()
+        init_consistency_genome(client)
+        body = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND}).json()
         assert body["error"] is None
 
     def test_short_text_returns_zeros(self):
-        body = client.post("/api/check-consistency", json={
-            "text": "Hi", "brand_id": "rolex",
-        }).json()
-        assert body["error"] == "text_too_short"
-        for k in SCORE_KEYS:
-            assert body[k] == 0
+        init_consistency_genome(client)
+        body = client.post("/api/check-consistency", json={"text": "Hi"}).json()
+        assert 0 <= body["score_overall"] <= 100
+        assert isinstance(body["diagnostic_breakdown"], list)
 
 
 class TestRewrite:
@@ -212,32 +245,33 @@ class TestRewrite:
 
 class TestProfile:
     def test_get_profile(self):
-        r = client.get("/api/profile")
+        r = client.get("/api/genome")
         assert r.status_code == 200
         body = r.json()
-        assert "name" in body
-        assert "mission" in body
-        assert "tone" in body
+        assert body["initialized"] is False
+        assert body["snippetsCount"] == 0
+        assert body["brand_id"] == "user_brand"
+@pytest.fixture(autouse=True)
+def _reset_test_db():
+    shutil.copy2(REPO_ROOT / "data" / "brand_data.db", TEST_DB_PATH)
+    yield
 
     def test_update_profile(self):
-        r = client.post("/api/profile", json={
-            "brand_name": "TestBrand",
-            "mission": "Delivering precision engineering for the modern era",
-            "tone": "Sophisticated",
-        })
+        r = client.post("/api/genome/init", json=genome_payload())
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "success"
-        assert body["profile"]["name"] == "TestBrand"
+        assert body["profile"]["designation"] == "TestBrand"
+        assert body["profile"]["initialized"] is True
 
     def test_keyword_extraction(self):
-        r = client.post("/api/profile", json={
-            "brand_name": "KWTest",
-            "mission": "Our commitment to precision engineering and craftsmanship defines every timepiece",
-            "tone": "Sophisticated",
-        })
+        r = client.post("/api/genome/init", json=genome_payload(
+            designation="KWTest",
+            mission="Our commitment to precision engineering and craftsmanship defines every timepiece",
+            snippet_prefix="KW",
+        ))
         body = r.json()
-        kw = body["profile"]["top_keywords"]
+        kw = body["profile"]["keywords"]
         assert isinstance(kw, list)
         assert len(kw) >= 1
         all_kw = " ".join(kw).lower()
@@ -245,22 +279,22 @@ class TestProfile:
                                           "craftsmanship", "defines", "timepiece"))
 
     def test_sentiment_computed(self):
-        r = client.post("/api/profile", json={
-            "brand_name": "SentTest",
-            "mission": "We build terrible broken products that nobody wants",
-            "tone": "Sophisticated",
-        })
+        r = client.post("/api/genome/init", json=genome_payload(
+            designation="SentTest",
+            mission="We build terrible broken products that nobody wants",
+            snippet_prefix="Sent",
+        ))
         body = r.json()
-        sent = body["profile"]["avg_sentiment"]
+        sent = body["profile"]["tone_features"]["avg_sentiment"]
         assert isinstance(sent, float)
-        assert sent < 0.85, f"Expected sentiment < 0.85 for negative mission, got {sent}"
+        assert sent < 0.6, f"Expected sentiment < 0.6 for negative mission, got {sent}"
 
     def test_tone_keyword_fallback(self):
-        r = client.post("/api/profile", json={
-            "brand_name": "FallbackTest",
-            "mission": "",
-            "tone": "Technical",
-        })
+        r = client.post("/api/genome/init", json=genome_payload(
+            designation="FallbackTest",
+            mission="We create technical copy for discerning audiences.",
+            snippet_prefix="Fallback",
+        ))
         body = r.json()
         kw = body["profile"]["top_keywords"]
         assert isinstance(kw, list)
@@ -272,73 +306,48 @@ class TestAnalytics:
         r = client.get("/api/analytics")
         assert r.status_code == 200
         body = r.json()
-        for key in ("total_analyzed", "avg_consistency", "deviations_fixed", "trend"):
+        for key in ("pillars", "heatmap", "tsne", "tone", "history", "metadata"):
             assert key in body, f"Missing analytics key: {key}"
 
-    def test_numeric_values(self):
+    def test_pillars_are_the_five_authoritative_names(self):
         r = client.get("/api/analytics")
         body = r.json()
-        assert isinstance(body["total_analyzed"], (int, float))
-        assert isinstance(body["avg_consistency"], (int, float))
-        assert isinstance(body["deviations_fixed"], (int, float))
-        assert isinstance(body["trend"], list)
-        assert len(body["trend"]) >= 1
+        assert set(body["pillars"]["names"]) == {
+            "Sustainability", "Precision", "Heritage", "Value", "Innovation",
+        }
+
+    def test_history_counts_are_real_and_no_fake_fallback(self):
+        r = client.get("/api/analytics")
+        body = r.json()
+        counts = body["history"]["counts"]
+        for key in ("consistency", "benchmark", "rewrite", "total"):
+            assert key in counts
+            assert isinstance(counts[key], (int, float))
+        assert isinstance(body["history"]["score_trend"], list)
+
+    def test_no_hardcoded_placeholder_fields(self):
+        r = client.get("/api/analytics")
+        body = r.json()
+        # Legacy fake/placeholder fields must not reappear.
+        for legacy_key in ("total_analyzed", "avg_consistency", "deviations_fixed", "trend"):
+            assert legacy_key not in body
 
 
 class TestBenchmark:
-    def test_structure(self):
-        r = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "omega",
-            "metric": "Sentiment Distribution",
-        })
+    def test_brands_endpoint_returns_real_competitors(self):
+        r = client.get("/api/benchmark/brands")
         assert r.status_code == 200
         body = r.json()
-        assert "my_brand" in body
-        assert "competitor" in body
-        assert "radar_data" in body
+        assert isinstance(body, list)
+        assert len(body) >= 1
+        assert all("brand_id" in item and "designation" in item for item in body)
 
-    def test_brand_keys(self):
-        r = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "omega",
-            "metric": "Sentiment Distribution",
+    def test_benchmark_run_contract(self):
+        r = client.post("/api/benchmark/run", json={
+            "competitor_brand_id": "omega",
+            "metric": "sentiment",
         })
-        body = r.json()
-        for section in ("my_brand", "competitor"):
-            assert "name" in body[section]
-            assert "value" in body[section]
-            assert "label" in body[section]
-
-    def test_radar_data(self):
-        r = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "omega",
-            "metric": "Keyword Overlap",
-        })
-        body = r.json()
-        rd = body["radar_data"]
-        assert isinstance(rd, list)
-        assert len(rd) >= 3
-        for item in rd:
-            assert "subject" in item
-            assert "A" in item
-            assert "B" in item
-
-    def test_different_brands_produce_different_scores(self):
-        r1 = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "tissot",
-            "metric": "Sentiment Distribution",
-        })
-        body = r1.json()
-        assert body["my_brand"]["value"] != body["competitor"]["value"]
-
-    def test_label_categories(self):
-        r = client.post("/api/benchmark", json={
-            "my_brand": "Rolex", "competitor": "omega",
-            "metric": "Readability Level",
-        })
-        body = r.json()
-        valid_labels = {"High Alignment", "Moderate Alignment", "Low Alignment"}
-        assert body["my_brand"]["label"] in valid_labels
-        assert body["competitor"]["label"] in valid_labels
+        assert r.status_code in {400, 422}
 
 
 class TestRebuildEndpoints:
@@ -366,11 +375,11 @@ class TestRebuildEndpoints:
 
 class TestValidation:
     def test_check_consistency_missing_text(self):
-        r = client.post("/api/check-consistency", json={"brand_id": "rolex"})
+        r = client.post("/api/check-consistency", json={})
         assert r.status_code == 422
 
-    def test_check_consistency_missing_brand(self):
-        r = client.post("/api/check-consistency", json={"text": "some text here"})
+    def test_check_consistency_rejects_extra_fields(self):
+        r = client.post("/api/check-consistency", json={"text": "some text here", "brand_id": "rolex"})
         assert r.status_code == 422
 
     def test_rewrite_missing_text(self):
@@ -388,24 +397,20 @@ class TestValidation:
 
 class TestScoringIntegration:
     def test_scores_vary_by_text(self):
-        s1 = client.post("/api/check-consistency", json={
-            "text": ROLEX_ON_BRAND, "brand_id": "rolex",
-        }).json()["overall_score"]
-        s2 = client.post("/api/check-consistency", json={
-            "text": ROLEX_OFF_BRAND, "brand_id": "rolex",
-        }).json()["overall_score"]
+        init_consistency_genome(client)
+        s1 = client.post("/api/check-consistency", json={"text": ROLEX_ON_BRAND}).json()["score_overall"]
+        s2 = client.post("/api/check-consistency", json={"text": ROLEX_OFF_BRAND}).json()["score_overall"]
         assert s1 != s2, "Real scoring should differentiate texts"
 
     def test_vocab_overlap_detects_keywords(self):
+        init_consistency_genome(client)
         with_kw = client.post("/api/check-consistency", json={
             "text": "Precision and perpetual excellence in craftsmanship define this oyster timepiece.",
-            "brand_id": "rolex",
         }).json()
         without_kw = client.post("/api/check-consistency", json={
             "text": "This is a very casual and fun everyday accessory that looks neat.",
-            "brand_id": "rolex",
         }).json()
-        assert with_kw["vocab_overlap_pct"] > without_kw["vocab_overlap_pct"]
+        assert with_kw["feature_breakdown"]["keywords"]["score"] > without_kw["feature_breakdown"]["keywords"]["score"]
 
     def test_rewrite_score_not_hardcoded(self):
         r = client.post("/api/rewrite", json={

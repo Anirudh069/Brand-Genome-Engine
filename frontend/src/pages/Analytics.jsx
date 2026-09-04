@@ -3,62 +3,61 @@ import { LineChart as LineChartIcon, Activity, Flame, Share2, BarChart3, Fingerp
 import { Card } from "../components/ui/Card";
 import { Metric } from "../components/ui/Metric";
 import { API_BASE } from "../lib/constants";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart, ScatterChart, Scatter, ZAxis, BarChart, Bar, Cell } from 'recharts';
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart, ScatterChart, Scatter, ZAxis, BarChart, Bar } from 'recharts';
+
+// Fixed deterministic palette for the (at most ~10) competitor brands in the t-SNE plot.
+const BRAND_COLORS = [
+    "#6366F1", "#22D3EE", "#F97316", "#A855F7", "#10B981",
+    "#EAB308", "#EC4899", "#3B82F6", "#F43F5E", "#84CC16",
+];
+
+const colorForBrand = (brandId, order) => {
+    const idx = order.indexOf(brandId);
+    return BRAND_COLORS[idx >= 0 ? idx % BRAND_COLORS.length : 0];
+};
 
 export const Analytics = ({ profile }) => {
     const [data, setData] = useState(null);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         fetch(`${API_BASE}/analytics`)
             .then(res => res.json())
             .then(d => setData(d))
-            .catch(err => console.error(err));
+            .catch(err => setError(String(err)));
     }, []);
 
-    // 1. Line Chart Data (Trajectory)
-    const lineData = data?.trend ? [
-        { name: 'Jan', score: data.trend[0] || 70 },
-        { name: 'Feb', score: data.trend[1] || 75 },
-        { name: 'Mar', score: data.trend[2] || 80 },
-        { name: 'Apr', score: data.trend[3] || 85 },
-        { name: 'May', score: data.trend[4] || 84 },
-    ] : [];
+    const pillarNames = data?.pillars?.names || [];
+    const pillarKeywords = data?.pillars?.keywords || {};
 
-    // 2. Bar Chart Data (Tone Histogram)
-    // Map bins to labels: 0.0-0.2 (Very Casual), 0.2-0.4 (Casual), etc.
-    const toneLabels = ['V. Casual', 'Casual', 'Mixed', 'Formal', 'V. Formal'];
-    const toneData = data?.tone_histogram?.counts ? data.tone_histogram.counts.reduce((acc, count, i) => {
-        // Group 10 bins into 5 labels for cleaner UI
-        const index = Math.floor(i / 2);
-        if (!acc[index]) acc[index] = { name: toneLabels[index], competitors: 0, userBrand: 0 };
-        acc[index].competitors += count;
-        return acc;
-    }, []) : [];
-
-    // Add user brand peak to histogram
-    if (toneData.length > 0 && profile?.avg_formality !== undefined) {
-        const userIdx = Math.min(4, Math.floor(profile.avg_formality * 5));
-        toneData[userIdx].userBrand = 25; // Visual peak for user brand
-    }
-
-    // 3. Scatter Plot Data (t-SNE Clustering)
-    const tsnePoints = data?.tsne_points ? data.tsne_points.map(p => ({
-        ...p,
-        z: p.brand_id === 'user_brand' ? 400 : 200,
-        name: p.brand_name
-    })) : [];
-
-    const userPoint = tsnePoints.find(p => p.brand_id === 'user_brand') ||
-                      (profile?.tsne_x !== undefined ? { x: profile.tsne_x, y: profile.tsne_y, z: 400, name: profile.name || "Your Brand", brand_id: 'user_brand' } : null);
-    const competitorPoints = tsnePoints.filter(p => p.brand_id !== 'user_brand');
-
-    // 4. Heatmap Matrix Data (Messaging Pillars)
-    const heatmapThemes = data?.heatmap?.pillars || ['Pillar A', 'Pillar B', 'Pillar C', 'Pillar D', 'Pillar E'];
     const heatmapBrands = data?.heatmap?.brands || [];
+    const heatmapValues = data?.heatmap?.values || [];
 
-    const getHeatmapColor = (weight) => {
-        // Map 0-1 to blue scale opacity
-        return `rgba(99, 102, 241, ${weight * 0.9 + 0.1})`;
+    const tsnePoints = data?.tsne?.points || [];
+    const brandOrder = [...new Set(tsnePoints.map(p => p.brand_id))];
+
+    const toneTotals = data?.tone?.totals || {};
+    const toneLabels = data?.tone?.labels || [];
+    const userToneLabel = profile?.initialized ? profile?.tone_label : null;
+    const toneData = toneLabels.map(label => ({
+        name: label,
+        competitors: toneTotals[label] || 0,
+        userBrand: userToneLabel === label ? 1 : 0,
+    }));
+
+    const scoreTrend = data?.history?.score_trend || [];
+    const trendData = scoreTrend.map((entry, i) => ({
+        name: `#${i + 1}`,
+        score: entry.score,
+        event_type: entry.event_type,
+    }));
+
+    const counts = data?.history?.counts || { consistency: 0, benchmark: 0, rewrite: 0, total: 0 };
+
+    const getHeatmapColor = (value) => {
+        // value is already scaled 0-100 by the backend
+        const opacity = Math.min(1, Math.max(0.1, value / 100));
+        return `rgba(99, 102, 241, ${opacity})`;
     };
 
     return (
@@ -69,32 +68,50 @@ export const Analytics = ({ profile }) => {
                 </div>
                 <div>
                     <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">System Analytics</h2>
-                    <p className="text-gray-400 mt-2 text-lg">Multi-dimensional visualizations of the cross-market brand genome.</p>
+                    <p className="text-gray-400 mt-2 text-lg">Database-derived analytics across the competitive brand corpus.</p>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 md:gap-8 mb-12">
-                <Metric label="Copies Analyzed" value={data ? data.total_analyzed : "..."} trend="Live Tracking" delay={100} />
-                <Metric label="Avg Consistency" value={data ? `${data.avg_consistency}%` : "..."} trend="System-wide" delay={200} />
-                <Metric label="Deviations Fixed" value={data ? data.deviations_fixed : "..."} trend="Post-Rewrite" delay={300} />
+            {error && (
+                <Card className="w-full mb-8 border-red-500/30">
+                    <p className="text-red-400 text-sm">Failed to reach analytics API: {error}</p>
+                </Card>
+            )}
+
+            {/* Counters */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 mb-12">
+                <Metric label="Consistency Checks" value={data ? counts.consistency : "..."} trend="From analysis_history" delay={100} />
+                <Metric label="Benchmarks" value={data ? counts.benchmark : "..."} trend="From analysis_history" delay={150} />
+                <Metric label="Rewrites" value={data ? counts.rewrite : "..."} trend="From analysis_history" delay={200} />
+                <Metric label="Total Analyses" value={data ? counts.total : "..."} trend="Live count" delay={250} />
             </div>
 
-            {/* Row 1: Area Chart (Trajectory) */}
+            {/* Row 1: Score Trend */}
             <Card delay={400} className="w-full mb-8 relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                     <Activity size={160} />
                 </div>
                 <div className="flex justify-between items-center mb-10">
                     <div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Consistency Trajectory</h3>
-                        <p className="text-gray-400 text-sm">Aggregated score variations over the engine's operation period.</p>
+                        <h3 className="text-2xl font-bold text-white mb-2">Score History Trend</h3>
+                        <p className="text-gray-400 text-sm">Chronological pre-analysis scores from real analysis_history events.</p>
                     </div>
                 </div>
 
                 <div className="h-[300px] w-full mt-4">
-                    {data ? (
+                    {!data ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl p-12">
+                            <Activity className="text-indigo-500/20 mb-4 animate-pulse" size={48} />
+                            <span className="text-gray-500 font-bold uppercase tracking-widest text-[10px]">Synchronizing...</span>
+                        </div>
+                    ) : trendData.length === 0 ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl p-12">
+                            <Activity className="text-gray-600 mb-4" size={48} />
+                            <span className="text-gray-500 font-semibold text-sm">No score history yet.</span>
+                        </div>
+                    ) : (
                         <ResponsiveContainer width="100%" height="100%" minHeight={300}>
-                            <AreaChart data={lineData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
+                            <AreaChart data={trendData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
                                         <stop offset="5%" stopColor="#6366F1" stopOpacity={0.3} />
@@ -107,36 +124,39 @@ export const Analytics = ({ profile }) => {
                                 <Area type="monotone" dataKey="score" stroke="#6366F1" strokeWidth={4} fillOpacity={1} fill="url(#colorScore)" activeDot={{ r: 8, fill: '#818CF8', stroke: '#fff', strokeWidth: 2 }} />
                             </AreaChart>
                         </ResponsiveContainer>
-                    ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl p-12">
-                            <Activity className="text-indigo-500/20 mb-4 animate-pulse" size={48} />
-                            <span className="text-gray-500 font-bold uppercase tracking-widest text-[10px]">Synchronizing...</span>
-                        </div>
                     )}
                 </div>
             </Card>
 
-            {/* Row 2: Histogram & Scatter */}
+            {/* Row 2: Tone & t-SNE */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                {/* Tone Histogram */}
+                {/* Tone Distribution */}
                 <Card delay={500} className="flex flex-col">
                     <div className="mb-8">
                         <div className="flex items-center gap-3 mb-2">
                             <BarChart3 className="text-purple-400" size={24} />
                             <h3 className="text-xl font-bold text-white">Genome Tone Distribution</h3>
                         </div>
-                        <p className="text-gray-400 text-sm">Formality density mapping (Market Average vs Your Brand Projection)</p>
+                        <p className="text-gray-400 text-sm">Deterministic tone label counts across the competitor corpus (formality + sentiment).</p>
                     </div>
                     <div className="h-[300px] w-full">
-                        <ResponsiveContainer width="100%" height="100%" minHeight={300}>
-                            <BarChart data={toneData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9CA3AF', fontSize: 11 }} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#4B5563', fontSize: 11 }} />
-                                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#18181B', borderColor: '#3F3F46', color: '#fff' }} />
-                                <Bar dataKey="competitors" name="Market Base" fill="#1F2937" radius={[4, 4, 0, 0]} />
-                                <Bar dataKey="userBrand" name="Your Brand Projection" fill="#818CF8" radius={[4, 4, 0, 0]} />
-                            </BarChart>
-                        </ResponsiveContainer>
+                        {data && toneData.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+                                <BarChart data={toneData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9CA3AF', fontSize: 11 }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#4B5563', fontSize: 11 }} allowDecimals={false} />
+                                    <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#18181B', borderColor: '#3F3F46', color: '#fff' }} />
+                                    <Bar dataKey="competitors" name="Competitor Corpus" fill="#1F2937" radius={[4, 4, 0, 0]} />
+                                    {userToneLabel && (
+                                        <Bar dataKey="userBrand" name="Your Brand" fill="#818CF8" radius={[4, 4, 0, 0]} />
+                                    )}
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center border border-dashed border-white/5 rounded-2xl">
+                                <span className="text-gray-500 font-semibold text-sm">{data ? "No tone data available." : "Synchronizing..."}</span>
+                            </div>
+                        )}
                     </div>
                 </Card>
 
@@ -145,49 +165,46 @@ export const Analytics = ({ profile }) => {
                     <div className="mb-8 overflow-hidden relative">
                         <div className="flex items-center gap-3 mb-2">
                             <Share2 className="text-teal-400" size={24} />
-                            <h3 className="text-xl font-bold text-white">t-SNE Semantic Proximity</h3>
+                            <h3 className="text-xl font-bold text-white">Chunk-Level t-SNE Projection</h3>
                         </div>
-                        <p className="text-gray-400 text-sm">2D projection of brand centroids from 384-dimension vector space</p>
+                        <p className="text-gray-400 text-sm">
+                            {data ? `${tsnePoints.length} sampled brand_chunks (384-d embeddings), random_state=${data?.tsne?.random_state}` : "2D projection of sampled brand_chunks embeddings"}
+                        </p>
                     </div>
                     <div className="h-[300px] w-full border border-white/5 rounded-2xl bg-[#09090B]/50 p-4">
-                        <ResponsiveContainer width="100%" height="100%" minHeight={300}>
-                            <ScatterChart margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
-                                <XAxis type="number" dataKey="x" name="D1" hide domain={['auto', 'auto']} />
-                                <YAxis type="number" dataKey="y" name="D2" hide domain={['auto', 'auto']} />
-                                <ZAxis type="number" dataKey="z" range={[80, 400]} />
-                                <Tooltip cursor={{ strokeDasharray: '3 3' }} content={({ active, payload }) => {
-                                    if (active && payload && payload.length) {
-                                        const p = payload[0].payload;
-                                        return (
-                                            <div className="bg-[#111116] px-4 py-2.5 border border-white/10 rounded-xl shadow-2xl text-white">
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <div className={`w-2 h-2 rounded-full ${p.brand_id === 'user_brand' ? 'bg-indigo-400' : 'bg-gray-500'}`} />
-                                                    <span className="font-black text-sm uppercase tracking-tight">{p.name}</span>
+                        {data && tsnePoints.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+                                <ScatterChart margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                                    <XAxis type="number" dataKey="x" name="D1" hide domain={['auto', 'auto']} />
+                                    <YAxis type="number" dataKey="y" name="D2" hide domain={['auto', 'auto']} />
+                                    <ZAxis type="number" range={[60, 60]} />
+                                    <Tooltip cursor={{ strokeDasharray: '3 3' }} content={({ active, payload }) => {
+                                        if (active && payload && payload.length) {
+                                            const p = payload[0].payload;
+                                            return (
+                                                <div className="bg-[#111116] px-4 py-2.5 border border-white/10 rounded-xl shadow-2xl text-white">
+                                                    <div className="font-black text-sm uppercase tracking-tight">{p.brand_name}</div>
+                                                    <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">{p.chunk_id}</div>
                                                 </div>
-                                                <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
-                                                    Vector Rank: {p.brand_id === 'user_brand' ? 'Active' : 'Reference'}
-                                                </div>
-                                            </div>
-                                        )
-                                    }
-                                    return null;
-                                }} />
-                                <Scatter name="Competitors" data={competitorPoints} fill="#1F2937" stroke="rgba(255,255,255,0.1)" />
-                                {userPoint && (
-                                    <Scatter
-                                        name="Your Brand"
-                                        data={[userPoint]}
-                                        fill="#6366F1"
-                                        shape={(props) => (
-                                            <g>
-                                                <circle cx={props.cx} cy={props.cy} r={12} fill="#6366F1" className="animate-pulse" filter="blur(4px)" opacity="0.5" />
-                                                <circle cx={props.cx} cy={props.cy} r={6} fill="#6366F1" stroke="#fff" strokeWidth={2} />
-                                            </g>
-                                        )}
-                                    />
-                                )}
-                            </ScatterChart>
-                        </ResponsiveContainer>
+                                            )
+                                        }
+                                        return null;
+                                    }} />
+                                    {brandOrder.map(brandId => (
+                                        <Scatter
+                                            key={brandId}
+                                            name={tsnePoints.find(p => p.brand_id === brandId)?.brand_name || brandId}
+                                            data={tsnePoints.filter(p => p.brand_id === brandId)}
+                                            fill={colorForBrand(brandId, brandOrder)}
+                                        />
+                                    ))}
+                                </ScatterChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                                <span className="text-gray-500 font-semibold text-sm">{data ? "No t-SNE points available." : "Synchronizing..."}</span>
+                            </div>
+                        )}
                     </div>
                 </Card>
             </div>
@@ -202,46 +219,59 @@ export const Analytics = ({ profile }) => {
                         <Flame className="text-orange-400" size={24} />
                         <h3 className="text-xl font-bold text-white">Messaging Pillar Intensity</h3>
                     </div>
-                    <p className="text-gray-400 text-sm">Heatmap of thematic keyword density aggregated across the competitive landscape.</p>
+                    <p className="text-gray-400 text-sm">
+                        TF-IDF heatmap over 5 fixed pillar concepts; keyword sets per pillar are auto-derived from the competitor corpus (hover a column header).
+                    </p>
                 </div>
 
-                <div className="overflow-x-auto">
-                    <div className="min-w-[700px]">
-                        {/* Headers */}
-                        <div className="flex mb-6 border-b border-white/5 pb-4">
-                            <div className="w-40 shrink-0 text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">Target Identity</div>
-                            {heatmapThemes.map((theme, i) => (
-                                <div key={i} className="flex-1 text-center text-[10px] font-black text-gray-400 tracking-[0.15em] uppercase">
-                                    {theme}
-                                </div>
-                            ))}
-                        </div>
-                        {/* Matrix Rows */}
-                        <div className="space-y-4">
-                            {heatmapBrands.map((brand, i) => (
-                                <div key={i} className="flex items-center group">
-                                    <div className={`w-40 shrink-0 text-xs font-black truncate pr-4 uppercase tracking-tight ${brand.brand_id === 'user_brand' ? 'text-indigo-400 flex items-center gap-2' : 'text-gray-500'}`}>
-                                        {brand.brand_id === 'user_brand' && <Fingerprint size={12} />}
-                                        {brand.brand_name}
+                {heatmapBrands.length === 0 || pillarNames.length === 0 ? (
+                    <div className="w-full h-40 flex items-center justify-center border border-dashed border-white/5 rounded-2xl">
+                        <span className="text-gray-500 font-semibold text-sm">{data ? "No heatmap data available." : "Synchronizing..."}</span>
+                    </div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <div className="min-w-[700px]">
+                            {/* Headers */}
+                            <div className="flex mb-6 border-b border-white/5 pb-4">
+                                <div className="w-40 shrink-0 text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">Competitor</div>
+                                {pillarNames.map((pillar, i) => (
+                                    <div
+                                        key={i}
+                                        className="flex-1 text-center text-[10px] font-black text-gray-400 tracking-[0.15em] uppercase cursor-help"
+                                        title={`Derived terms: ${(pillarKeywords[pillar] || []).map(k => k.term).join(', ')}`}
+                                    >
+                                        {pillar}
                                     </div>
-                                    {brand.weights.map((weight, j) => (
-                                        <div key={j} className="flex-1 px-1.5">
-                                            <div
-                                                className="h-12 w-full rounded-xl border border-white/5 transition-all group-hover:scale-[1.02] flex items-center justify-center shadow-lg relative overflow-hidden"
-                                                style={{ backgroundColor: getHeatmapColor(weight) }}
-                                                title={`${brand.brand_name} -> ${heatmapThemes[j]}: ${(weight * 100).toFixed(0)}%`}
-                                            >
-                                                {weight > 0.8 && <div className="absolute inset-0 bg-white/5 animate-pulse" />}
-                                            </div>
+                                ))}
+                            </div>
+                            {/* Matrix Rows */}
+                            <div className="space-y-4">
+                                {heatmapBrands.map((brandName, i) => (
+                                    <div key={i} className="flex items-center group">
+                                        <div className="w-40 shrink-0 text-xs font-black truncate pr-4 uppercase tracking-tight text-gray-500 flex items-center gap-2">
+                                            <Fingerprint size={12} className="opacity-40" />
+                                            {brandName}
                                         </div>
-                                    ))}
-                                </div>
-                            ))}
+                                        {(heatmapValues[i] || []).map((value, j) => (
+                                            <div key={j} className="flex-1 px-1.5">
+                                                <div
+                                                    className="h-12 w-full rounded-xl border border-white/5 transition-all group-hover:scale-[1.02] flex items-center justify-center shadow-lg relative overflow-hidden"
+                                                    style={{ backgroundColor: getHeatmapColor(value) }}
+                                                    title={`${brandName} -> ${pillarNames[j]}: ${value.toFixed(1)}`}
+                                                >
+                                                    {value > 80 && <div className="absolute inset-0 bg-white/5 animate-pulse" />}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
             </Card>
 
         </div>
     );
 };
+

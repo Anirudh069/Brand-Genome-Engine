@@ -14,7 +14,7 @@ function App() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetch(`${API_BASE}/profile`);
+      const res = await fetch(`${API_BASE}/genome`);
       if (res.ok) {
         const data = await res.json();
         console.log("Global Profile State Fetched:", data);
@@ -45,8 +45,8 @@ function App() {
   return (
     <MainLayout activeTab={activeTab} setActiveTab={setActiveTab}>
       {activeTab === 'setup' && <BrandSetup profile={profile} fetchProfile={fetchProfile} />}
-      {activeTab === 'check' && <ConsistencyCheck profile={profile} />}
-      {activeTab === 'bench' && <Benchmarking profile={profile} />}
+      {activeTab === 'check' && <ConsistencyCheck profile={profile} onGoToSetup={() => setActiveTab('setup')} />}
+      {activeTab === 'bench' && <Benchmarking profile={profile} onGoToSetup={() => setActiveTab('setup')} />}
       {activeTab === 'analytics' && <Analytics profile={profile} />}
     </MainLayout>
   );

@@ -1,118 +1,116 @@
-import { useState } from 'react';
-import { CheckCircle, Loader2, Sparkles, AlertCircle, Info, BookOpen, Fingerprint } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { AlertCircle, CheckCircle, Loader2, Sparkles, ShieldAlert, Fingerprint } from 'lucide-react';
 import { Card } from "../components/ui/Card";
 import { TextArea } from "../components/ui/TextArea";
 import { Button } from "../components/ui/Button";
-import { BrandSelector } from "../components/ui/BrandSelector";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
-import { SuggestionsPanel } from "../components/ui/SuggestionsPanel";
-import { RewritePanel } from "../components/ui/RewritePanel";
-import { GroundingExamples } from "../components/ui/GroundingExamples";
 import { API_BASE } from "../lib/constants";
 
-const ENABLE_REWRITE_UI = true;
+const clampScore = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
-// Helper component for rendering Before/After scores with animated progress bars
-const DualMetricBar = ({ label, beforeVal, afterVal, baseColor }) => {
-    return (
-        <div className="group mb-6">
-            <div className="flex justify-between text-xs font-bold tracking-widest uppercase mb-3">
-                <span className="text-gray-400 group-hover:text-gray-200 transition-colors flex items-center gap-2">
-                    {label}
-                </span>
-                <div className="flex gap-4">
-                    <span className="text-gray-400">B: {beforeVal}%</span>
-                    <span className="text-indigo-300">A: {afterVal}%</span>
-                </div>
-            </div>
-            <div className="space-y-2">
-                {/* Before Bar */}
-                <div className="w-full bg-[#1A1A24] rounded-full h-1.5 overflow-hidden border border-white/5 opacity-60">
-                    <div
-                        className="bg-gray-500 h-full rounded-full transition-all duration-1000 ease-out"
-                        style={{ width: `${beforeVal}%` }}
-                    />
-                </div>
-                {/* After Bar */}
-                <div className="w-full bg-[#1A1A24] rounded-full h-2.5 overflow-hidden border border-indigo-500/20 shadow-inner">
-                    <div
-                        className={`bg-gradient-to-r ${baseColor} h-full rounded-full transition-all duration-1000 ease-out relative shadow-[0_0_10px_currentColor]`}
-                        style={{ width: `${afterVal}%` }}
-                    >
-                        <div className="absolute inset-0 bg-white/20 w-full h-full animate-[shimmer_2s_infinite]" />
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
+const renderScalar = (value) => {
+    if (value === null || value === undefined) return "—";
+    if (Array.isArray(value)) return value.join(", ");
+    if (typeof value === "object") {
+        const entries = Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== "");
+        return entries.map(([key, item]) => `${key}: ${Array.isArray(item) ? item.join(", ") : String(item)}`).join(" · ");
+    }
+    return String(value);
+};
+
+const severityClass = (severity) => {
+    if (severity === "high") return "text-red-300 border-red-500/20 bg-red-500/10";
+    if (severity === "moderate") return "text-amber-300 border-amber-500/20 bg-amber-500/10";
+    return "text-sky-300 border-sky-500/20 bg-sky-500/10";
 };
 
 
-export const ConsistencyCheck = () => {
-    const [selectedBrand, setSelectedBrand] = useState(null);
-    const [copyText, setCopyText] = useState("This watch is awesome and super easy to wear every day. Cool design.");
+export const ConsistencyCheck = ({ profile, onGoToSetup }) => {
+    const [copyText, setCopyText] = useState("This timepiece balances precision craftsmanship with calm confidence and enduring elegance.");
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
+    const [error, setError] = useState(null);
+    const [forceGenomeBlock, setForceGenomeBlock] = useState(false);
+    const genomeMissing = forceGenomeBlock || !(profile && profile.initialized);
+
+    const featureEntries = useMemo(() => Object.entries(result?.feature_breakdown || {}), [result]);
 
     const handleAction = async () => {
-        if (!selectedBrand || !copyText) return;
+        if (genomeMissing || !copyText.trim()) return;
         setLoading(true);
         setResult(null);
+        setError(null);
 
         try {
-            // Using /api/rewrite if UI is enabled, else /api/check-consistency
-            const endpoint = ENABLE_REWRITE_UI ? "rewrite" : "check-consistency";
-            const res = await fetch(`${API_BASE}/${endpoint}`, {
+            const res = await fetch(`${API_BASE}/consistency/score`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    brand_id: selectedBrand.brand_id,
                     text: copyText,
-                    n_grounding_chunks: 3
                 }),
             });
 
             const data = await res.json();
 
-            if (!res.ok || data?.error) {
-                const rawErr = data?.error || data?.detail?.error || "unknown";
-                const friendlyErrors = {
-                    profile_missing: "Genome Calibration Required: This brand hasn't been initialized in the engine yet.",
-                    text_too_short: "Text processing requires at least 10 words for accurate semantic extraction.",
-                };
-                setResult({ error: friendlyErrors[rawErr] || rawErr });
+            if (!res.ok) {
+                const rawErr = data?.detail?.error || data?.error || "unknown";
+                if (rawErr === "genome_not_initialized") {
+                    setForceGenomeBlock(true);
+                    setError("Genome Setup Required: Initialize the active genome before scoring copy.");
+                    setResult(null);
+                    setLoading(false);
+                    return;
+                }
+                setError(data?.detail?.message || data?.detail || rawErr || "Unable to score copy.");
+                setResult(null);
                 setLoading(false);
                 return;
             }
 
-            if (ENABLE_REWRITE_UI) {
-                setResult({
-                    score_before: data.score_before,
-                    score_after: data.score_after,
-                    rewritten_text: data.rewritten_text,
-                    suggestions: data.suggestions,
-                    grounding_chunks_used: data.grounding_chunks_used,
-                    diagnostics: data.score_after?.diagnostics || ["Optimal alignment detected across core pillars."],
-                    error: null,
-                });
-            } else {
-                setResult({
-                    score_before: data,
-                    score_after: data,
-                    rewritten_text: "",
-                    suggestions: [],
-                    grounding_chunks_used: [],
-                    diagnostics: data.diagnostics || [],
-                    error: null,
-                });
-            }
+            setResult(data);
         } catch (err) {
             console.error(err);
-            setResult({ error: "Network anomaly: Connection to engine failed." });
+            setError("Network anomaly: Connection to engine failed.");
+            setResult(null);
         }
 
         setLoading(false);
     };
+
+    if (genomeMissing) {
+        return (
+            <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both max-w-6xl mx-auto px-4 sm:px-6">
+                <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
+                    <div className="flex items-center gap-5">
+                        <div className="p-3.5 bg-gradient-to-br from-indigo-500 to-cyan-400 rounded-2xl shadow-[0_0_30px_rgba(99,102,241,0.2)] text-white border border-indigo-400/30">
+                            <Sparkles size={28} />
+                        </div>
+                        <div>
+                            <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Consistency Check</h2>
+                            <p className="text-gray-400 mt-2 text-lg">Score copy against the active persisted genome.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <Card className="border-dashed border-amber-500/20 bg-amber-500/5">
+                    <div className="flex items-start gap-4">
+                        <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300">
+                            <ShieldAlert size={24} />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="text-xl font-bold text-white mb-2">Genome Setup Required</h3>
+                            <p className="text-gray-400 max-w-2xl">
+                                Consistency scoring is blocked until the active user genome has been initialized. Set up the genome first, then return here to evaluate copy against the persisted user profile.
+                            </p>
+                            <div className="mt-6 flex flex-wrap gap-3">
+                                <Button primary onClick={onGoToSetup}>Go to Genome Setup</Button>
+                            </div>
+                        </div>
+                    </div>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 ease-out fill-mode-both max-w-7xl mx-auto px-4 sm:px-6">
@@ -123,33 +121,30 @@ export const ConsistencyCheck = () => {
                         <Sparkles size={28} />
                     </div>
                     <div>
-                        <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">
-                            {ENABLE_REWRITE_UI ? "Rewrite Engine" : "Analysis Engine"}
-                        </h2>
-                        <p className="text-gray-400 mt-2 text-lg">Align and elevate copy perfectly to the brand genome.</p>
+                        <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Consistency Check</h2>
+                        <p className="text-gray-400 mt-2 text-lg">Score copy against the active persisted genome.</p>
                     </div>
                 </div>
-                <div className="flex flex-col items-start md:items-end gap-2">
-                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Active Brand Target</span>
-                    <BrandSelector selectedId={selectedBrand?.brand_id} onSelect={setSelectedBrand} />
+                <div className="flex flex-col items-start md:items-end gap-2 text-right">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Active Genome</span>
+                    <span className="text-sm font-semibold text-gray-200">{profile?.designation || profile?.brand_name || "Initialized genome"}</span>
                 </div>
             </div>
 
-            <ErrorBanner error={result?.error} />
+            <ErrorBanner error={error} />
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                {/* Left Column: Input and Engine Controls */}
                 <div className="lg:col-span-7 flex flex-col gap-6">
                     <Card delay={100} className="flex flex-col relative overflow-hidden">
                         <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                             <Sparkles size={120} />
                         </div>
                         <h3 className="text-xl font-bold text-white mb-6 tracking-wide flex items-center gap-3">
-                            <BookOpen size={20} className="text-indigo-400" />
-                            Source Material
+                            <Fingerprint size={20} className="text-indigo-400" />
+                            Copy To Evaluate
                         </h3>
                         <TextArea
-                            label="Raw Non-Compliant Copy"
+                            label="Input Copy"
                             rows={8}
                             value={copyText}
                             onChange={(e) => setCopyText(e.target.value)}
@@ -159,121 +154,115 @@ export const ConsistencyCheck = () => {
                             primary
                             className="w-full text-lg gap-3 py-5 group"
                             onClick={handleAction}
-                            disabled={loading || !selectedBrand || copyText.length < 5}
+                            disabled={loading || genomeMissing || !copyText.trim()}
                         >
                             {loading ? <Loader2 className="animate-spin" /> : (
                                 <>
                                     <Sparkles size={20} className="group-hover:scale-125 transition-transform" />
-                                    {ENABLE_REWRITE_UI ? "Ground & Rewrite" : "Analyze Consistency"}
+                                    Check Consistency
                                 </>
                             )}
                         </Button>
-
-                        {/* RAG Examples Section */}
-                        {ENABLE_REWRITE_UI && result && !result.error && result.grounding_chunks_used?.length > 0 && (
-                            <div className="mt-8 pt-8 border-t border-white/5">
-                                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                    <Info size={14} /> Grounding Context (RAG)
-                                </h4>
-                                <GroundingExamples chunks={result.grounding_chunks_used} />
-                            </div>
-                        )}
                     </Card>
 
-                    {ENABLE_REWRITE_UI && result && !result.error && (
-                        <div className="space-y-6 animate-in slide-in-from-top-4 duration-700">
-                            <SuggestionsPanel suggestions={result.suggestions} />
-                            <RewritePanel text={result.rewritten_text} />
-                        </div>
-                    )}
                 </div>
 
-                {/* Right Column: Analytics & Scoring */}
                 <div className="lg:col-span-5 flex flex-col gap-6">
-                    {!result || result.error ? (
+                    {!result ? (
                         <Card delay={200} className="flex flex-col items-center justify-center p-16 text-center border-dashed border-white/10 bg-transparent h-full min-h-[500px]">
                             <div className="p-8 rounded-full bg-white/5 mb-8 animate-pulse text-indigo-500/20">
                                 <Fingerprint size={64} />
                             </div>
-                            <h3 className="text-2xl font-bold text-gray-200">Awaiting Submissions</h3>
+                            <h3 className="text-2xl font-bold text-gray-200">Awaiting Submission</h3>
                             <p className="text-gray-500 mt-4 max-w-sm text-lg leading-relaxed">
-                                {selectedBrand
-                                    ? `Engine ready for ${selectedBrand.brand_name}. Paste copy to run deep semantic mapping.`
-                                    : "Select a brand target above to activate the engine."
-                                }
+                                Paste copy to score against the persisted genome. The result will show feature-level drift and diagnostics.
                             </p>
-                            {!selectedBrand && (
-                                <div className="mt-8 flex items-center gap-2 text-amber-500/50 bg-amber-500/5 px-4 py-2 rounded-lg border border-amber-500/10 text-xs font-bold uppercase tracking-widest">
-                                    <AlertCircle size={14} /> Brand Profile Missing
-                                </div>
-                            )}
                         </Card>
                     ) : (
                         <Card delay={300} className="h-full flex flex-col">
                             <div className="flex items-center justify-between mb-8">
-                                <h3 className="text-xl font-bold text-white tracking-wide">Alignment Shift</h3>
+                                <h3 className="text-xl font-bold text-white tracking-wide">Overall Consistency</h3>
                                 <div className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-black text-indigo-400 uppercase tracking-widest">
-                                    Live Matrix
+                                    Live Score
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4 mb-10 pb-8 border-b border-white/10">
-                                <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Original State</p>
-                                    <div className="text-4xl font-black text-gray-300">
-                                        {result.score_before?.overall_score ?? 0}<span className="text-lg text-gray-600 font-bold ml-1">/100</span>
-                                    </div>
-                                </div>
-                                <div className="p-4 bg-indigo-500/5 rounded-2xl border border-indigo-500/10 text-right">
-                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">
-                                        {ENABLE_REWRITE_UI ? "Post-Rewrite" : "Analysed State"}
-                                    </p>
-                                    <div className="text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
-                                        {result.score_after?.overall_score ?? 0}<span className="text-lg text-indigo-400 font-bold ml-1">/100</span>
+                            <div className="grid grid-cols-1 gap-4 mb-10 pb-8 border-b border-white/10">
+                                <div className="p-5 bg-indigo-500/5 rounded-2xl border border-indigo-500/10">
+                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">Overall Score</p>
+                                    <div className="flex items-end gap-3">
+                                        <div className="text-6xl font-black text-white drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">
+                                            {clampScore(result.score_overall)}
+                                        </div>
+                                        <div className="text-lg text-indigo-300 font-bold pb-2">/100</div>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Diagnostics Breakdown */}
                             <div className="mb-10">
                                 <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                    <AlertCircle size={12} /> Diagnostics Breakdown
+                                    <CheckCircle size={12} /> Brand Mentions
                                 </h4>
-                                <div className="space-y-3">
-                                    {(result.diagnostics || []).map((diag, i) => (
-                                        <div key={i} className="flex gap-3 text-sm text-gray-400 bg-white/5 p-3 rounded-xl border border-white/5 italic">
-                                            <div className="mt-1 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
-                                            {diag}
-                                        </div>
-                                    ))}
+                                <div className="p-4 bg-white/5 rounded-2xl border border-white/5 text-sm text-gray-300">
+                                    <span className="font-bold text-white">{result.brand_name_mentions?.count ?? 0}</span> neutral mentions of <span className="font-semibold text-indigo-300">{result.brand_name_mentions?.designation || profile?.designation || profile?.brand_name || "the active genome"}</span>
                                 </div>
                             </div>
 
                             <div className="space-y-8 flex-1">
-                                <DualMetricBar
-                                    label="Tone Resonance"
-                                    beforeVal={result.score_before?.tone_pct ?? 0}
-                                    afterVal={result.score_after?.tone_pct ?? 0}
-                                    baseColor="from-amber-400 to-orange-500"
-                                />
-                                <DualMetricBar
-                                    label="Vocabulary Overlap"
-                                    beforeVal={result.score_before?.vocab_overlap_pct ?? 0}
-                                    afterVal={result.score_after?.vocab_overlap_pct ?? 0}
-                                    baseColor="from-indigo-500 to-blue-500"
-                                />
-                                <DualMetricBar
-                                    label="Sentiment Alignment"
-                                    beforeVal={result.score_before?.sentiment_alignment_pct ?? 0}
-                                    afterVal={result.score_after?.sentiment_alignment_pct ?? 0}
-                                    baseColor="from-emerald-400 to-teal-500"
-                                />
-                                <DualMetricBar
-                                    label="Readability Match"
-                                    beforeVal={result.score_before?.readability_match_pct ?? 0}
-                                    afterVal={result.score_after?.readability_match_pct ?? 0}
-                                    baseColor="from-purple-500 to-pink-500"
-                                />
+                                <div>
+                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <AlertCircle size={12} /> Feature Breakdown
+                                    </h4>
+                                    <div className="space-y-3">
+                                        {featureEntries.map(([name, item]) => (
+                                            <div key={name} className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                                                <div className="flex items-start justify-between gap-4 mb-3">
+                                                    <div>
+                                                        <div className="text-sm font-bold text-white capitalize tracking-wide">{name.replace(/_/g, " ")}</div>
+                                                        <div className="text-xs text-gray-500 mt-1">{renderScalar(item.details?.matched_keywords || item.input_value)}</div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="text-xl font-black text-white">{clampScore(item.score)}</div>
+                                                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">/100</div>
+                                                    </div>
+                                                </div>
+                                                <div className="h-2 rounded-full bg-[#1A1A24] overflow-hidden border border-white/5">
+                                                    <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400" style={{ width: `${clampScore(item.score)}%` }} />
+                                                </div>
+                                                <div className="mt-3 text-xs text-gray-400 space-y-1">
+                                                    <div>Input: {renderScalar(item.input_value)}</div>
+                                                    <div>Target: {renderScalar(item.target_value)}</div>
+                                                    <div>Delta: {renderScalar(item.delta)}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <AlertCircle size={12} /> Diagnostics
+                                    </h4>
+                                    <div className="space-y-3">
+                                        {(result.diagnostic_breakdown || []).length > 0 ? (
+                                            result.diagnostic_breakdown.map((diag, index) => (
+                                                <div key={`${diag.dimension}-${index}`} className={`flex flex-col gap-2 text-sm p-4 rounded-2xl border ${severityClass(diag.severity)}`}>
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="font-bold uppercase tracking-widest text-[10px]">{diag.dimension.replace(/_/g, " ")}</span>
+                                                        <span className="text-[10px] font-black uppercase tracking-widest">{diag.severity}</span>
+                                                    </div>
+                                                    <div className="text-gray-100">{diag.message}</div>
+                                                    <div className="text-xs text-gray-300">Suggestion: {diag.suggestion}</div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="flex gap-3 text-sm text-emerald-300 bg-emerald-500/10 p-4 rounded-2xl border border-emerald-500/20">
+                                                <div className="mt-1 w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                                                The copy is closely aligned with the active genome across the scored dimensions.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </Card>
                     )}

@@ -10,8 +10,8 @@ import { API_BASE } from "../lib/constants";
 
 export const BrandSetup = ({ profile, fetchProfile }) => {
     const defaultForm = {
-        brand_name: '',
-        mission: '',
+        designation: '',
+        mission_core_vision: '',
         tone: 'Sophisticated',
         snippets: ['', '', '', '', '', '', '']
     };
@@ -21,14 +21,16 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
     const [progress, setProgress] = useState(0);
     const [rebuilding, setRebuilding] = useState(false);
     const [rebuildStatus, setRebuildStatus] = useState(null);
+    const [saveStatus, setSaveStatus] = useState(null);
+    const [saveError, setSaveError] = useState(null);
 
     // Synchronize form with profile when profile is loaded/updated
     useEffect(() => {
-        if (profile && profile.brand_id === 'user_brand') {
+        if (profile) {
              console.log("Populating form from server profile:", profile);
              setForm({
-                brand_name: profile.brand_name || profile.name || '',
-                mission: profile.mission || '',
+                designation: profile.designation || profile.brand_name || profile.name || '',
+                mission_core_vision: profile.mission_core_vision || profile.mission || '',
                 tone: profile.tone_label || 'Sophisticated',
                 snippets: profile.snippets || ['', '', '', '', '', '', '']
             });
@@ -61,13 +63,15 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
     };
 
     const handleSave = async () => {
+        setSaveStatus(null);
+        setSaveError(null);
         // Validation
-        if (!form.brand_name || !form.mission) {
-            alert("Please provide a brand name and mission.");
+        if (!form.designation.trim() || !form.mission_core_vision.trim()) {
+            setSaveError("Please provide a brand designation and mission/core vision.");
             return;
         }
-        if (form.snippets.some(s => s.trim().length < 10)) {
-            alert("Please provide all 7 snippets (min 10 characters each) for accurate genome calibration.");
+        if (form.snippets.length !== 7 || form.snippets.some(s => !s.trim())) {
+            setSaveError("Please provide exactly 7 nonblank snippets.");
             return;
         }
 
@@ -83,10 +87,14 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
         }, 600);
 
         try {
-            const res = await fetch(`${API_BASE}/profile`, {
+            const res = await fetch(`${API_BASE}/genome/init`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(form)
+                body: JSON.stringify({
+                    designation: form.designation,
+                    mission_core_vision: form.mission_core_vision,
+                    snippets: form.snippets,
+                })
             });
 
             if (res.ok) {
@@ -94,15 +102,21 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                 setProgress(100);
                 setTimeout(async () => {
                     await fetchProfile();
+                    setSaveStatus("Genome initialised successfully.");
                     setInitializing(false);
                     localStorage.removeItem('genome_draft');
                 }, 1000);
             } else {
-                alert("Failed to update profile.");
+                const data = await res.json().catch(() => ({}));
+                const message = Array.isArray(data?.detail)
+                    ? data.detail.map(item => item?.msg || item?.message || "Validation error").join("; ")
+                    : data?.detail || data?.message || "Failed to initialise genome.";
+                setSaveError(message);
                 setInitializing(false);
             }
         } catch (err) {
             console.error(err);
+            setSaveError("Network anomaly: Genome initialisation failed.");
             setInitializing(false);
         } finally {
             clearInterval(interval);
@@ -172,8 +186,8 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                         )}
                     </div>
 
-                    <Input label="Brand Designation" placeholder="e.g. Rolex, Omega..." value={form.brand_name} onChange={(e) => setForm({ ...form, brand_name: e.target.value })} />
-                    <TextArea label="Mission Statement" rows={3} placeholder="The core purpose and vision of the brand..." value={form.mission} onChange={(e) => setForm({ ...form, mission: e.target.value })} />
+                    <Input label="Brand Designation" placeholder="e.g. Rolex, Omega..." value={form.designation} onChange={(e) => setForm({ ...form, designation: e.target.value })} />
+                    <TextArea label="Mission / Core Vision" rows={3} placeholder="The core purpose and vision of the brand..." value={form.mission_core_vision} onChange={(e) => setForm({ ...form, mission_core_vision: e.target.value })} />
 
                     <div className="mb-10 group w-full">
                         <label className="block text-xs font-semibold tracking-widest uppercase text-gray-400 mb-3 transition-colors group-focus-within:text-indigo-400">
@@ -225,6 +239,18 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                     <Button primary className="w-full text-lg mt-10 py-5 group" onClick={handleSave} disabled={loading}>
                         {loading ? <Loader2 className="animate-spin" /> : <>Compile Brand Genome <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" /></>}
                     </Button>
+
+                    {saveError && (
+                        <div className="mt-4 text-xs font-bold px-4 py-3 rounded-xl border bg-red-500/10 border-red-500/20 text-red-400">
+                            {saveError}
+                        </div>
+                    )}
+
+                    {saveStatus && (
+                        <div className="mt-4 text-xs font-bold px-4 py-3 rounded-xl border bg-emerald-500/10 border-emerald-500/20 text-emerald-400">
+                            {saveStatus}
+                        </div>
+                    )}
                 </Card>
 
                 <div className="space-y-8">
@@ -244,14 +270,14 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                                 <div>
                                     <span className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Core Identifier</span>
                                     <div className="text-2xl font-black text-white tracking-tight">
-                                        {profile.name || "Awaiting Definition"}
+                                        {profile.designation || profile.brand_name || profile.name || "Awaiting Definition"}
                                     </div>
                                 </div>
 
                                 <div>
                                     <span className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Semantic Anchors</span>
                                     <div className="flex flex-wrap gap-2.5">
-                                        {(profile.top_keywords || []).map((t, i) => (
+                                        {(profile.top_keywords || profile.keywords || []).map((t, i) => (
                                             <span
                                                 key={t}
                                                 className="px-4 py-1.5 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-full text-[11px] font-bold tracking-wide transition-transform hover:-translate-y-1 cursor-default shadow-sm"
@@ -259,7 +285,7 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                                                 {t}
                                             </span>
                                         ))}
-                                        {(!profile.top_keywords || profile.top_keywords.length === 0) && <span className="text-gray-500 italic text-sm">Genome pending...</span>}
+                                        {((!profile.top_keywords || profile.top_keywords.length === 0) && (!profile.keywords || profile.keywords.length === 0)) && <span className="text-gray-500 italic text-sm">Genome pending...</span>}
                                     </div>
                                 </div>
 
@@ -267,12 +293,12 @@ export const BrandSetup = ({ profile, fetchProfile }) => {
                                     <div className="flex items-center gap-6">
                                         <div>
                                             <span className="block text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-1">Snippets</span>
-                                            <span className="text-xl font-black text-white">{profile.snippetsCount || 0}/7</span>
+                                            <span className="text-xl font-black text-white">{profile.snippetsCount || profile.snippet_count || 0}/7</span>
                                         </div>
                                         <div className="w-px h-10 bg-white/10" />
                                         <div>
                                             <span className="block text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-1">Tone Base</span>
-                                            <span className="text-lg font-bold text-indigo-400">{profile.tone_label || 'Unset'}</span>
+                                            <span className="text-lg font-bold text-indigo-400">{profile.tone_label || profile.tone_features?.tone_label || 'Unset'}</span>
                                         </div>
                                     </div>
                                 </div>
