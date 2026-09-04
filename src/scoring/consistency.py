@@ -1,260 +1,239 @@
 """
-consistency.py –* **readability_match_pct** – Gaussian similarity on Flesch score vs profile mean.
-* **tone_pct** – Gaussian similarity on formality vs profile mean.
-  (Cosine embedding similarity reserved for offline batch pipeline.)nical brand-consistency scorer.
+consistency.py — canonical brand-consistency scorer (Person C).
 
-Public API
-----------
+PUBLIC API — unchanged from the previous version. ``src/api/main.py`` imports
+these two functions and nothing else, so the API and the frontend need no
+modification:
+
     compute_consistency_score(text: str, brand_profile: dict) -> dict
     generate_edit_plan(text: str, brand_profile: dict) -> dict
 
-The returned dict from ``compute_consistency_score`` has **exactly** these keys
-(all floats clamped to [0, 100]):
+Two functions are added, both optional for existing callers:
 
-    overall_score, tone_pct, vocab_overlap_pct,
-    sentiment_alignment_pct, readability_match_pct
+    generate_drift_report_dict(text, brand_profile) -> dict
+    score_before_after_dict(original, rewritten, brand_profile) -> dict
 
-Algorithm (from ``docs/scoring_spec.md``):
+WHAT CHANGED AND WHY
+--------------------
+The previous implementation scored authentic brand copy at 51/100 and casual
+off-brand copy at 45/100 — a six-point separation. Measured against the real
+Rolex profile, an unrelated sentence about pizza delivery also scored 45. The
+same paragraph scored 51 against Rolex and 47 against Tissot, so the scorer
+could not reliably tell two brands apart.
 
-* **vocab_overlap_pct** – Jaccard similarity of text content-words vs
-  ``brand_profile["top_keywords"]``.
-* **sentiment_alignment_pct** – Gaussian similarity:
-  ``exp(-((s - μ)² / (2σ²))) * 100`` where μ/σ come from the profile.
-* **readability_match_pct** – Inverse-distance with adaptive tolerance:
-  ``max(0, 1 - |f - μ_f| / tolerance) * 100``.
-* **tone_pct** – Formality-distance proxy:
-  ``max(0, 1 - |formality_text - formality_brand|) * 100``.
-  (Cosine embedding similarity reserved for offline batch pipeline.)
-* **overall_score** – Weighted average:
-  ``0.30*tone + 0.25*sentiment + 0.25*vocab + 0.20*readability``.
+Four causes, all fixed in the modules this file now delegates to:
+
+1. Brand vocabulary was chosen by raw frequency, which returns the nouns every
+   watch brand shares — for Rolex, ``rolex, watch, case, oyster, time``. It is
+   now chosen by TF-IDF across brands, blended with frequency, with proper
+   nouns and specification vocabulary excluded by data-driven rules.
+
+2. The brand's own name was the top-ranked keyword, so repeating it was the
+   cheapest route to a high score. Name tokens are now excluded from the
+   vocabulary at build time and stripped before scoring; mentions are counted
+   and reported as a neutral signal, as the Phase 4A brief requires.
+
+3. Sentiment was effectively ternary, producing a standard deviation wide
+   enough that unrelated text still scored in the seventies. It is now a graded
+   density measure, and the lexicon holds emotional words only — "precision"
+   and "heritage" were being counted as both sentiment and vocabulary.
+
+4. Tone, the heaviest-weighted metric, was a restatement of sentiment. It now
+   measures formality, lexical variety and sentence length, none of which
+   duplicate another metric.
+
+Full derivations, weights and edge cases: docs/scoring_spec_v2.md
+
+The output schema is unchanged and remains frozen.
 """
 
 from __future__ import annotations
 
 import logging
-import math
-import re
+import os
 from typing import Any
+
+from src.profiles.brand_profile_builder import (
+    load_brand_profile,
+    list_brands,
+    is_genome_initialised,
+    build_user_genome,
+    BrandProfileNotFoundError,
+)
+from src.scoring.consistency_scorer import (
+    ScoreResult,
+    score_consistency,
+    extract_text_features,
+    resolve_weights,
+    WEIGHT_PRESETS,
+    EmbeddingDimensionError,
+    FeatureExtractionError,
+    MIN_WORDS,
+)
+from src.scoring.diagnostics import build_diagnostics
+from src.scoring.drift_report import generate_drift_report
+from src.scoring.edit_plan import generate_edit_plan as _generate_edit_plan
 
 logger = logging.getLogger(__name__)
 
-# ── Feature extractors (real pipeline) ────────────────────────────────────
-# Imported eagerly – they are lightweight (no model load at import time).
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "data/brand_data.db")
 
-from src.feature_extraction.sentiment_extractor import extract_sentiment
-from src.feature_extraction.formality_extractor import extract_formality
-from src.feature_extraction.readability_extractor import flesch_reading_ease
-from src.feature_extraction.feature_utils import clean_text, word_tokenize
+__all__ = [
+    "compute_consistency_score",
+    "generate_edit_plan",
+    "generate_drift_report_dict",
+    "score_before_after_dict",
+    "build_diagnostics_dict",
+    "ScoreResult",
+    "BrandProfileNotFoundError",
+    "EmbeddingDimensionError",
+    "FeatureExtractionError",
+    "MIN_WORDS",
+    "WEIGHT_PRESETS",
+    "resolve_weights",
+    "build_user_genome",
+    "load_brand_profile",
+    "list_brands",
+    "is_genome_initialised",
+]
 
-# NOTE: Embedding model is NOT loaded at scoring time to avoid segfaults
-# on CPython 3.9 + macOS when faiss-cpu is co-loaded.  Tone uses a
-# formality-distance proxy instead.  Cosine-embedding tone is reserved
-# for the offline batch pipeline.
-
-# ── Text helpers ──────────────────────────────────────────────────────────
-
-_WORD_RE = re.compile(r"[a-zA-Z']+")
-
-_STOPWORDS = frozenset({
-    "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "for",
-    "with", "as", "at", "is", "are", "was", "were", "be", "been", "being",
-    "it", "this", "that", "these", "those", "by", "from", "you", "we",
-    "they", "he", "she", "i", "our", "your", "their", "its", "not", "have",
-    "has", "had", "do", "does", "did", "will", "would", "could", "should",
-    "may", "can", "all", "more", "also", "than", "into", "which", "about",
-    "so", "if", "when", "what", "there", "each", "just", "most", "other",
-    "some", "such", "only", "over", "new", "very", "after", "before",
-    "between", "been",
-})
-
-
-def _tokenize(text: str) -> list[str]:
-    return [w.lower() for w in _WORD_RE.findall(text or "")]
+_ZERO_SCORE = {
+    "overall_score": 0.0,
+    "tone_pct": 0.0,
+    "vocab_overlap_pct": 0.0,
+    "sentiment_alignment_pct": 0.0,
+    "readability_match_pct": 0.0,
+}
 
 
-def _content_words(text: str) -> list[str]:
-    return [w for w in _tokenize(text) if w not in _STOPWORDS and len(w) >= 3]
+# ── Public API ────────────────────────────────────────────────────────────────
 
-
-def _clamp(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
-    return max(lo, min(hi, value))
-
-
-# ── Math primitives (from scoring spec) ───────────────────────────────────
-
-def _jaccard(set_a: list[str], set_b: list[str]) -> float:
-    """Jaccard similarity.  Both empty → 0 (not 100)."""
-    a, b = set(set_a), set(set_b)
-    if not a and not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-
-def _gaussian_similarity(value: float, mean: float, std: float) -> float:
-    """exp(-((value-mean)² / (2*std²))).  std clamped to ≥ 0.01."""
-    std = max(std, 0.01)
-    return math.exp(-((value - mean) ** 2) / (2 * std ** 2))
-
-
-def _inverse_distance(value: float, mean: float, tolerance: float) -> float:
-    """max(0, 1 - |value-mean| / tolerance).  tolerance clamped to ≥ 20."""
-    tolerance = max(tolerance, 20.0)
-    return max(0.0, 1.0 - abs(value - mean) / tolerance)
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity.  Zero-vector → 0.  Dimension mismatch → 0 + log."""
-    if not a or not b:
-        return 0.0
-    if len(a) != len(b):
-        logger.warning(
-            "Embedding dimension mismatch: %d vs %d — returning 0.",
-            len(a), len(b),
-        )
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-# ── Safe profile field access ─────────────────────────────────────────────
-
-def _float(profile: dict, key: str, fallback: float) -> float:
-    """Get a float from *profile*, returning *fallback* on any error."""
-    try:
-        return float(profile.get(key, fallback))
-    except (TypeError, ValueError):
-        return fallback
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Public API
-# ═══════════════════════════════════════════════════════════════════════════
-
-def compute_consistency_score(text: str, brand_profile: dict[str, Any]) -> dict[str, Any]:
+def compute_consistency_score(text: str, brand_profile: dict,
+                              preset: str | dict | None = None) -> dict[str, float]:
     """
-    Score how consistent *text* is with *brand_profile*.
+    Score `text` against `brand_profile`.
 
-    Returns a dict with exactly five keys (all floats, 0–100):
+    Returns exactly these keys, all floats clamped to [0, 100]:
+
         overall_score, tone_pct, vocab_overlap_pct,
         sentiment_alignment_pct, readability_match_pct
 
-    Never raises on bad input — returns zeros and logs warnings.
+    `preset` selects a weight profile — "balanced", "tone_heavy" or
+    "semantic_heavy" — or accepts a custom weight dict. Omit it and the
+    genome's own stored preference is used, falling back to balanced. The
+    sub-scores are identical across presets; only overall_score changes.
+
+    Never raises: a malformed profile or feature returns the all-zero result and
+    logs, because the API must answer rather than 500 on bad input.
     """
-    bp = brand_profile or {}
+    if not brand_profile:
+        logger.warning("compute_consistency_score called with an empty profile")
+        return dict(_ZERO_SCORE)
 
-    # ── Short-text guard ──────────────────────────────────────────────────
-    words = _tokenize(text or "")
-    if len(words) < 10:
-        return {
-            "overall_score": 0.0,
-            "tone_pct": 0.0,
-            "vocab_overlap_pct": 0.0,
-            "sentiment_alignment_pct": 0.0,
-            "readability_match_pct": 0.0,
-        }
-
-    # ── Extract features from input text ──────────────────────────────────
-    cleaned = clean_text(text) or text or ""
-    text_sentiment = extract_sentiment(cleaned)          # [0, 1]
-    text_formality = extract_formality(cleaned)          # [0, 1]
-    text_flesch = flesch_reading_ease(cleaned)            # ~0–120
-    text_keywords = _content_words(cleaned)
-
-    # ── Brand profile targets ─────────────────────────────────────────────
-    mean_sentiment = _float(bp, "mean_sentiment", _float(bp, "avg_sentiment", 0.5))
-    std_sentiment = _float(bp, "std_sentiment", 0.15)
-    mean_flesch = _float(bp, "mean_flesch", _float(bp, "avg_readability_flesch", 50.0))
-    std_flesch = _float(bp, "std_flesch", 10.0)
-    mean_formality = _float(bp, "mean_formality", _float(bp, "avg_formality", 0.5))
-    std_formality = _float(bp, "std_formality", 0.05)
-    brand_keywords: list[str] = bp.get("top_keywords", []) or []
-
-    # ── 1) Vocabulary overlap (Jaccard) ───────────────────────────────────
-    vocab_overlap = _jaccard(text_keywords, brand_keywords)
-
-    # ── 2) Sentiment alignment (Gaussian) ─────────────────────────────────
-    sentiment_align = _gaussian_similarity(text_sentiment, mean_sentiment, std_sentiment)
-
-    # ── 3) Readability match (Gaussian) ───────────────────────────────────
-    readability = _gaussian_similarity(text_flesch, mean_flesch, max(std_flesch, 5.0))
-
-    # ── 4) Tone (Gaussian formality-distance) ─────────────────────────────
-    tone = _gaussian_similarity(text_formality, mean_formality, max(std_formality, 0.01))
-
-    # ── Overall (weighted average from spec) ──────────────────────────────
-    overall = (
-        0.30 * tone
-        + 0.25 * sentiment_align
-        + 0.25 * vocab_overlap
-        + 0.20 * readability
-    ) * 100.0
+    try:
+        features = extract_text_features(text or "")
+        result = score_consistency(features, brand_profile, preset=preset)
+    except (FeatureExtractionError, EmbeddingDimensionError) as exc:
+        logger.warning("Scoring failed for brand %s: %s",
+                       brand_profile.get("brand_id"), exc)
+        return dict(_ZERO_SCORE)
 
     return {
-        "overall_score": round(_clamp(overall), 1),
-        "tone_pct": round(_clamp(tone * 100.0), 1),
-        "vocab_overlap_pct": round(_clamp(vocab_overlap * 100.0), 1),
-        "sentiment_alignment_pct": round(_clamp(sentiment_align * 100.0), 1),
-        "readability_match_pct": round(_clamp(readability * 100.0), 1),
+        "overall_score": round(result.overall_score, 1),
+        "tone_pct": round(result.tone_pct, 1),
+        "vocab_overlap_pct": round(result.vocab_overlap_pct, 1),
+        "sentiment_alignment_pct": round(result.sentiment_alignment_pct, 1),
+        "readability_match_pct": round(result.readability_match_pct, 1),
     }
 
 
-def generate_edit_plan(text: str, brand_profile: dict[str, Any]) -> dict[str, Any]:
+def generate_edit_plan(text: str, brand_profile: dict,
+                       db_path: str | None = None,
+                       retriever=None) -> dict[str, Any]:
     """
-    Produce a structured edit plan for aligning *text* to *brand_profile*.
+    Build the rewrite instruction set for `text` against `brand_profile`.
+
+    Returns the frozen EditPlan shape:
+
+        brand_id, goals, avoid_terms, prefer_terms,
+        style_rules, tone_direction, grounding_chunks
+
+    plus `prompt` — the fully rendered LLM prompt. Callers that build their own
+    prompt can ignore it; using it keeps prompt wording next to the logic that
+    decided what belongs in it.
+
+    `retriever` accepts Person B's FAISS retrieval function with the contract
+    retriever(query_text, brand_id, k) -> list[str]. Without it, grounding
+    chunks are retrieved from brand_chunks by lexical ranking.
     """
-    bp = brand_profile or {}
-    brand_id = bp.get("brand_id", "unknown")
-    brand_keywords = bp.get("top_keywords", ["precision", "excellence"])
-    tone_label = bp.get("tone_label", "authoritative")
+    db_path = db_path or SQLITE_DB_PATH
 
-    cleaned = clean_text(text) or text or ""
-    text_formality = extract_formality(cleaned)
-    text_sentiment = extract_sentiment(cleaned)
-    text_readability = flesch_reading_ease(cleaned)
+    if not brand_profile:
+        return {
+            "brand_id": None, "goals": [], "avoid_terms": [], "prefer_terms": [],
+            "style_rules": [], "tone_direction": "", "grounding_chunks": [],
+            "prompt": None,
+        }
 
-    target_formality = _float(bp, "mean_formality", _float(bp, "avg_formality", 0.5))
-    target_sentiment = _float(bp, "mean_sentiment", _float(bp, "avg_sentiment", 0.5))
-    target_readability = _float(bp, "mean_flesch", _float(bp, "avg_readability_flesch", 50.0))
+    text = text or ""
+    features = extract_text_features(text)
 
-    goals: list[str] = []
-    style_rules: list[str] = []
+    try:
+        score = score_consistency(features, brand_profile)
+    except (FeatureExtractionError, EmbeddingDimensionError):
+        score = None
 
-    if text_formality < target_formality - 0.1:
-        goals.append("Increase formality to match brand voice")
-        style_rules.append("Use formal sentence structures")
-        style_rules.append("Avoid contractions")
-    elif text_formality > target_formality + 0.1:
-        goals.append("Reduce formality for approachability")
-        style_rules.append("Use shorter, more conversational sentences")
+    diagnostics = build_diagnostics(text, brand_profile, db_path=db_path)
+    drift = generate_drift_report(features, brand_profile, diagnostics, db_path=db_path)
+    plan = _generate_edit_plan(drift, brand_profile, text, score,
+                               db_path=db_path, retriever=retriever)
 
-    if text_sentiment < target_sentiment - 0.1:
-        goals.append("Raise sentiment closer to brand mean")
-    elif text_sentiment > target_sentiment + 0.1:
-        goals.append("Moderate sentiment to avoid over-enthusiasm")
+    payload = plan.to_dict()
+    payload["prompt"] = plan.to_prompt(text, brand_profile.get("brand_name"))
+    return payload
 
-    if text_readability > target_readability + 10:
-        goals.append("Reduce reading ease (increase sophistication)")
-    elif text_readability < target_readability - 10:
-        goals.append("Increase reading ease for accessibility")
 
-    if not goals:
-        goals.append("Fine-tune vocabulary to strengthen brand alignment")
+def generate_drift_report_dict(text: str, brand_profile: dict,
+                               db_path: str | None = None) -> dict[str, Any]:
+    """
+    Structured explanation of how `text` departs from the brand voice.
 
-    avoid_terms = [
-        "awesome", "cool", "super", "stuff", "things", "nice",
-        "basically", "literally", "pretty much",
-    ]
+        brand_id, drift_flags, sentiment_delta, readability_delta,
+        missing_keywords, excess_keywords, summary
 
+    New in Phase 4B — no drift report existed previously. `summary` is written
+    as plain English suitable for both the UI and the LLM prompt.
+    """
+    db_path = db_path or SQLITE_DB_PATH
+    if not brand_profile:
+        return {"brand_id": None, "drift_flags": [], "sentiment_delta": 0.0,
+                "readability_delta": 0.0, "missing_keywords": [],
+                "excess_keywords": [], "summary": ""}
+    features = extract_text_features(text or "")
+    return generate_drift_report(features, brand_profile, db_path=db_path).to_dict()
+
+
+def build_diagnostics_dict(text: str, brand_profile: dict,
+                           db_path: str | None = None) -> dict[str, Any]:
+    """
+    Word-level diagnostics: aligned terms, missing terms, off-brand terms,
+    pillar coverage, and the neutral brand-name mention count.
+    """
+    db_path = db_path or SQLITE_DB_PATH
+    if not brand_profile:
+        return {}
+    return build_diagnostics(text or "", brand_profile, db_path=db_path).to_dict()
+
+
+def score_before_after_dict(original_text: str, rewritten_text: str,
+                            brand_profile: dict) -> dict[str, Any]:
+    """
+    Score both versions of a rewrite with the identical function.
+
+    Returns {"before": {...}, "after": {...}}. Using one scorer for both halves
+    is what makes the two sets of numbers comparable at all.
+    """
     return {
-        "brand_id": brand_id,
-        "goals": goals,
-        "avoid_terms": avoid_terms,
-        "prefer_terms": brand_keywords[:10],
-        "style_rules": style_rules or ["Maintain current sentence structure"],
-        "tone_direction": tone_label,
-        "grounding_chunks": [],
+        "before": compute_consistency_score(original_text, brand_profile),
+        "after": compute_consistency_score(rewritten_text, brand_profile),
     }

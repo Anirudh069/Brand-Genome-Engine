@@ -43,3 +43,46 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "requires_model" in item.keywords:
             item.add_marker(skip_marker)
+
+
+# ── Person C: scoring fixtures ────────────────────────────────────────────────
+#
+# The behavioural tests run against a real copy of the brand database with
+# profiles built by the real builder, rather than a hand-written profile dict.
+# A hand-written profile is what allowed a scorer that ranked copy backwards to
+# pass a full unit-test suite.
+
+import shutil
+import sqlite3
+import tempfile
+
+from src.profiles.brand_profile_builder import build_brand_profiles, load_brand_profile
+
+_SOURCE_DB = os.path.join(os.path.dirname(__file__), "..", "data", "brand_data.db")
+
+
+@pytest.fixture(scope="session")
+def live_db():
+    """A throwaway copy of the real database with v2 profiles built."""
+    if not os.path.exists(_SOURCE_DB):
+        pytest.skip(f"No database at {_SOURCE_DB}")
+
+    tmpdir = tempfile.mkdtemp(prefix="bge_test_")
+    path = os.path.join(tmpdir, "brand_data.db")
+    shutil.copy(_SOURCE_DB, path)
+
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("DROP TABLE IF EXISTS analysis_history")
+        conn.commit()
+    finally:
+        conn.close()
+
+    build_brand_profiles(path, verbose=False)
+    yield path
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def rolex(live_db):
+    return load_brand_profile("rolex", live_db)
