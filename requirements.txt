@@ -27,20 +27,15 @@ python-dotenv>=0.21.0
 openai>=1.0.0
 
 # ── Database ─────────────────────────────────────────
-sqlalchemy>=2.0.0
 pyarrow>=15.0,<18
 
 # ── Web Scraping ─────────────────────────────────────
 requests>=2.28.0
-beautifulsoup4>=4.11.0
 
 # ── Visualisation ────────────────────────────────────
 matplotlib>=3.7.0
-plotly>=5.13.0
 
 # ── Testing ──────────────────────────────────────────
 pytest>=8.0,<9
 pytest-cov>=4.0.0
-
-# ── Utilities ────────────────────────────────────────
-tqdm>=4.66,<5
+httpx>=0.24.0              # required by fastapi.testclient.TestClient

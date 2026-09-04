@@ -179,7 +179,7 @@ class TestNeverThrows:
         "\x00\x01\x02\x7f",
         "I love this! 😀🎉🔥💯 Amazing day 🌟✨",
         "word " * 10_000,
-    ])
+    ], ids=["none", "empty", "whitespace", "int_42", "list_input", "control_chars", "emoji_heavy", "very_long"])
     def test_never_raises(self, text):
         result = extract_sentiment(text)
         assert isinstance(result, float)

@@ -5,6 +5,13 @@
 > **Rows:** 75  
 > **Brands:** 5 (Omega, Patek Phillipe, Rolex, TAG Heuer, Tissot — 15 texts each)
 
+> **STALE (Stage 9):** This report validates an early 5-brand/75-row feature
+> snapshot and is retained for historical reference only. The canonical
+> corpus is now 10 brands / 450 texts / 657 chunks in `data/brand_data.db`
+> (see [database.md](database.md)); the feature extractors it describes are
+> unchanged and still canonical, but the row counts/brand list above no
+> longer reflect the shipped dataset.
+
 ---
 
 ## 1. Per-Feature Summary

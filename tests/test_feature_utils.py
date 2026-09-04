@@ -318,39 +318,47 @@ class TestNeverThrows:
     """Every public function must return without raising for any input."""
 
     INPUTS_TEXT = [None, "", " ", "a", PUNCT_HEAVY, EMOJI_HEAVY, VERY_LONG, CONTROL_CHARS]
+    INPUTS_TEXT_IDS = ["none", "empty", "space", "a", "punct_heavy", "emoji_heavy", "very_long", "control_chars"]
     INPUTS_TOKENS = [None, [], [""], ["a", "b"], ["!"] * 1000]
+    INPUTS_TOKENS_IDS = ["none", "empty_list", "list_of_empty_str", "ab", "bang_x1000"]
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    # NOTE: explicit `ids=` is required here because one of the values is a
+    # 50 000-char string (VERY_LONG). Without `ids=`, pytest builds the test
+    # node id from repr(value), and pytest's PYTEST_CURRENT_TEST env var (set
+    # to the node id at setup/teardown) then exceeds Windows' 32767-char
+    # os.environ limit, raising ValueError and erroring unrelated tests.
+
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_clean_text(self, text):
         result = clean_text(text)
         assert isinstance(result, str)
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_safe_truncate(self, text):
         result = safe_truncate(text)
         assert isinstance(result, str)
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_sentence_split(self, text):
         result = sentence_split(text)
         assert isinstance(result, list)
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_word_tokenize(self, text):
         result = word_tokenize(text)
         assert isinstance(result, list)
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_punctuation_density(self, text):
         result = punctuation_density(text)
         assert isinstance(result, float)
 
-    @pytest.mark.parametrize("tokens", INPUTS_TOKENS)
+    @pytest.mark.parametrize("tokens", INPUTS_TOKENS, ids=INPUTS_TOKENS_IDS)
     def test_vocab_diversity(self, tokens):
         result = vocab_diversity(tokens)
         assert isinstance(result, float)
 
-    @pytest.mark.parametrize("text", INPUTS_TEXT)
+    @pytest.mark.parametrize("text", INPUTS_TEXT, ids=INPUTS_TEXT_IDS)
     def test_avg_sentence_length(self, text):
         result = avg_sentence_length(text)
         assert isinstance(result, float)

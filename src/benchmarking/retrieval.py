@@ -1,6 +1,17 @@
 """
 retrieval.py – Brand-level competitor retrieval and FAISS/sklearn index.
 
+LEGACY / STANDALONE RESEARCH UTILITY — NOT part of the live Phase 4 product.
+This module operates on a brand-level centroid embedding (one vector per
+brand, built from an older 5-brand feature parquet via
+``scripts/build_embeddings_index.py``). It is no longer imported by
+``src/api/main.py`` or any canonical endpoint. It is retained only because
+``scripts/query_competitors.py`` (a standalone CLI, covered by
+``tests/test_query_competitors_script.py``) still legitimately uses it.
+The live product's semantic retrieval is the chunk-level RAG stack in
+``src/retrieval/`` (see ``src/retrieval/rag_service.py``), which covers all
+10 competitors + the user brand.
+
 Provides a backend-agnostic API for building, saving, loading, and querying
 a nearest-neighbour index over brand embeddings.
 

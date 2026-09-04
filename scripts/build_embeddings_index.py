@@ -3,6 +3,12 @@
 build_embeddings_index.py – Aggregate text-level embeddings to brand-level
 and build a nearest-neighbour index for competitor retrieval.
 
+LEGACY / STANDALONE RESEARCH UTILITY — NOT part of the live Phase 4 product.
+Consumes an older 5-brand ``features.parquet`` snapshot, unrelated to the
+canonical 10-brand ``data/brand_data.db`` + chunk-level RAG index
+(``src/retrieval/``, built by ``scripts/build_rag_index.py``) used by the
+app today. Kept only for ``scripts/query_competitors.py`` and its test.
+
 Usage
 -----
   python -m scripts.build_embeddings_index \

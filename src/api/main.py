@@ -2,6 +2,7 @@ import os
 import sqlite3
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Literal
@@ -29,14 +30,6 @@ from src.benchmarking.market_benchmark import (
     run_market_benchmark,
 )
 
-# Optional: retrieval index for benchmarking (legacy brand-centroid tool,
-# unrelated to the Stage 5 chunk-level RAG index below)
-try:
-    from src.benchmarking.retrieval import load_index, query as query_index, backend_name
-    _RETRIEVAL_AVAILABLE = True
-except ImportError:
-    _RETRIEVAL_AVAILABLE = False
-
 # Stage 5: canonical chunk-level RAG retrieval service
 from src.retrieval.rag_service import MAX_TOP_K, MIN_TOP_K, RagError, retrieve_chunks as rag_retrieve_chunks
 
@@ -49,16 +42,27 @@ load_dotenv()
 
 SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "data/brand_data.db")
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
-FEATURES_PATH = os.getenv("FEATURES_PATH", "data/processed/features.parquet")
-INDEX_PATH = os.getenv("INDEX_PATH", "embeddings/brand_profile_index.faiss")
-METADATA_PATH = os.getenv("METADATA_PATH", "embeddings/metadata.json")
 ANALYTICS_CACHE_PATH = os.getenv("ANALYTICS_CACHE_PATH", "data/processed/analytics_cache.json")
 
 # Configure logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Brand Genome Engine", version="2.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialise the canonical SQLite schema on startup."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            logger.info("Database initialised successfully.")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to initialise database: {e}")
+        finally:
+            conn.close()
+    yield
+
+
+app = FastAPI(title="Brand Genome Engine", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,41 +115,6 @@ _FALLBACK_BRANDS = [
 
 
 # ── Benchmark helpers ─────────────────────────────────────────────────────
-
-_index_cache: dict[str, Any] = {}
-_metadata_cache: dict[str, Any] = {}
-
-
-def _load_benchmark_data():
-    """Lazy-load the FAISS index + metadata for benchmarking."""
-    if "index" in _index_cache:
-        return _index_cache.get("index"), _metadata_cache.get("meta", {})
-    if not _RETRIEVAL_AVAILABLE:
-        return None, {}
-    try:
-        if Path(INDEX_PATH).exists() and Path(METADATA_PATH).exists():
-            idx = load_index(INDEX_PATH)
-            with open(METADATA_PATH) as f:
-                meta = json.load(f)
-            _index_cache["index"] = idx
-            _metadata_cache["meta"] = meta
-            logger.info("Loaded benchmark index (%s, %d brands)", backend_name(), idx.n)
-            return idx, meta
-    except Exception as e:
-        logger.warning(f"Failed to load benchmark index: {e}")
-    return None, {}
-
-
-def _load_features_for_benchmarking():
-    """Load the features parquet for per-brand profile comparison."""
-    try:
-        import pandas as pd
-        if Path(FEATURES_PATH).exists():
-            return pd.read_parquet(FEATURES_PATH)
-    except Exception as e:
-        logger.warning(f"Could not load features: {e}")
-    return None
-
 
 # --- MODELS ---
 
@@ -309,19 +278,6 @@ def _score_consistency_for_current_user(conn: sqlite3.Connection, text: str) -> 
 
 
 # --- ENDPOINTS ---
-
-@app.on_event("startup")
-def startup_event():
-    """Initialise the canonical SQLite schema on startup."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            logger.info("Database initialised successfully.")
-        except sqlite3.Error as e:
-            logger.error(f"Failed to initialise database: {e}")
-        finally:
-            conn.close()
-
 
 @app.get("/api/health")
 def get_health():

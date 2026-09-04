@@ -184,7 +184,7 @@ class TestNeverThrows:
         "\x00\x01\x02\x7f",
         "I love this! 😀🎉🔥💯 Amazing day 🌟✨",
         "word " * 10_000,
-    ])
+    ], ids=["none", "empty", "whitespace", "int_42", "list_input", "control_chars", "emoji_heavy", "very_long"])
     def test_extract_embedding_never_raises(self, text):
         result = extract_embedding(text)
         assert isinstance(result, list)
@@ -199,7 +199,7 @@ class TestNeverThrows:
         "\x00\x01\x02\x7f",
         "I love this! 😀🎉🔥💯 Amazing day 🌟✨",
         "word " * 10_000,
-    ])
+    ], ids=["none", "empty", "whitespace", "int_42", "list_input", "control_chars", "emoji_heavy", "very_long"])
     def test_get_embedding_never_raises(self, text):
         result = get_embedding(text)
         assert isinstance(result, tuple)

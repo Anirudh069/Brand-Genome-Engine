@@ -5,6 +5,14 @@
 **Baseline commit:** `ff16735` (main)  
 **Status:** Plan — no code changes
 
+> **STALE (Stage 9):** This document is the original Phase 4 *plan*. It has
+> been fully superseded by the shipped implementation. In particular,
+> references to "placeholder charts", hardcoded mock analytics data, and
+> `ENABLE_REWRITE_UI` are historical — Analytics is now real/DB-derived and
+> the Rewrite UI is fully live. See [README.md](../README.md) and
+> [architecture.md](architecture.md) / [completion_matrix.md](completion_matrix.md)
+> for the current, accurate state.
+
 ---
 
 ## 1. Objectives

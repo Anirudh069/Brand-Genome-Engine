@@ -31,7 +31,7 @@ class TestReturnType:
         "word " * 10_000,
         "a",
         "123 456 789",
-    ])
+    ], ids=["none", "empty", "whitespace", "casual_slang", "formal_legal", "slang_emoji", "very_long", "a", "numbers"])
     def test_in_valid_range(self, text):
         result = extract_formality(text)
         assert 0.0 <= result <= 1.0
@@ -236,7 +236,7 @@ class TestNeverThrows:
         "\x00\x01\x02\x7f",
         "I love this! 😀🎉🔥💯 Amazing day 🌟✨",
         "word " * 10_000,
-    ])
+    ], ids=["none", "empty", "whitespace", "int_42", "list_input", "control_chars", "emoji_heavy", "very_long"])
     def test_never_raises(self, text):
         result = extract_formality(text)
         assert isinstance(result, float)

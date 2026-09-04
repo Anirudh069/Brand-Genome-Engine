@@ -2,6 +2,13 @@
 """
 query_competitors.py – Look up the nearest competitor brands for a given brand.
 
+LEGACY / STANDALONE RESEARCH UTILITY — NOT part of the live Phase 4 product.
+Operates on the old 5-brand centroid index built by
+``scripts/build_embeddings_index.py`` (``embeddings/metadata.json`` +
+``embeddings/brand_profile_index.faiss``). Retained as an independent CLI
+exploration tool; the live app's competitor-scoped semantic retrieval is
+``POST /api/rag/retrieve`` (chunk-level RAG over all 10 competitors).
+
 Usage
 -----
   python -m scripts.query_competitors --brand_name Rolex

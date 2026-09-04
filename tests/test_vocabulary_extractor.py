@@ -145,6 +145,7 @@ class TestNeverThrows:
             "I love this! 😀🎉🔥💯 Amazing day 🌟✨",
             "word " * 10_000,
         ],
+        ids=["none", "empty", "whitespace", "int_42", "list_input", "control_chars", "emoji_heavy", "very_long"],
     )
     def test_never_raises(self, text):
         # Should return a dict with zero-defaults at worst, never raise.
