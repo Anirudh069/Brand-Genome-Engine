@@ -186,8 +186,8 @@ def rewrite_copy(
     instructions, prompt_input = _build_prompt(genome_context, edit_plan, chunks, text)
 
     # 13-19: exactly ONE provider generation request.
-    active_provider = provider if provider is not None else build_provider()
     try:
+        active_provider = provider if provider is not None else build_provider()
         rewritten_text = active_provider.rewrite(
             instructions=instructions,
             input_text=prompt_input,
