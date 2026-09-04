@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # Brand Genome Engine
 
@@ -122,6 +122,20 @@ uvicorn src.api.main:app --reload
 npm run dev
 # -> http://localhost:5173
 ```
+
+## 8.1 One-click Windows startup
+
+On Windows, double-click [start-brand-genome.bat](start-brand-genome.bat) from the repository root to start the backend and frontend, wait for readiness, and open the UI in your default browser.
+
+First-run prerequisites:
+
+- Python installed
+- Node.js and npm installed
+- Python dependencies installed with `pip install -r requirements.txt`
+
+If [frontend/node_modules](frontend/node_modules) is missing, the launcher will run `npm ci` automatically.
+
+Optional shutdown helper: double-click [stop-brand-genome.bat](stop-brand-genome.bat) to stop launcher-owned backend and frontend processes safely.
 
 ## 9. Derived artifacts
 
